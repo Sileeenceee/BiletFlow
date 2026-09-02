@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: biletflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: biletflow
+      POSTGRES_USER: biletflow
+      POSTGRES_PASSWORD: biletflow123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U biletflow -d biletflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend/BiletFlow.Api
+      dockerfile: Dockerfile
+    container_name: biletflow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Server=postgres;Port=5432;Database=biletflow;User Id=biletflow;Password=biletflow123;
+      ASPNETCORE_URLS: http://+:6767;https://+:6969
+    ports:
+      - "6767:6767"
+      - "6969:6969"
+    volumes:
+      - ./backend/BiletFlow.Api:/app
+
+volumes:
+  postgres_data:
