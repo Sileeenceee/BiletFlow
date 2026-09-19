@@ -1,6 +1,8 @@
 # .NET
 bin/
 obj/
+TestResults/
+artifacts/
 *.user
 *.suo
 *.cache
@@ -16,6 +18,7 @@ obj/
 
 # Docker
 *.local
+.dockerignore
 
 docker-compose.override.yml
 
@@ -28,10 +31,30 @@ node_modules/
 .next/
 out/
 dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# Mobile
+mobile/.expo/
+mobile/.swiftpm/
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
 
 # Environment files
 .env
 .env.*
+!.env.example
+
+# Local databases and generated secrets
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
 
 # Git
 *.orig
