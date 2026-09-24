@@ -28,13 +28,23 @@ services:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__DefaultConnection: Server=postgres;Port=5432;Database=biletflow;User Id=biletflow;Password=biletflow123;
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=biletflow;Username=biletflow;Password=biletflow123
       ASPNETCORE_URLS: http://+:6767;https://+:6969
+      ASPNETCORE_Kestrel__Certificates__Default__Path: /https/devcert.pfx
+      ASPNETCORE_Kestrel__Certificates__Default__Password: changeit
     ports:
       - "6767:6767"
       - "6969:6969"
-    volumes:
-      - ./backend/BiletFlow.Api:/app
+    entrypoint: >
+      /bin/sh -c "mkdir -p /https &&
+      openssl req -x509 -newkey rsa:2048 -nodes -keyout /https/dev.key -out /https/dev.crt -days 365 -subj '/CN=localhost' >/dev/null 2>&1 &&
+      openssl pkcs12 -export -out /https/devcert.pfx -inkey /https/dev.key -in /https/dev.crt -password pass:changeit >/dev/null 2>&1 &&
+      exec dotnet BiletFlow.Api.dll"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -fsS https://localhost:6969/swagger/index.html >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres_data:

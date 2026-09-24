@@ -24,6 +24,8 @@ public class Program
         builder.Services.AddDbContext<AuthDbContext>(options => options.UseNpgsql(connectionString));
         builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
         builder.Services.AddScoped<AuthService>();
+        builder.Services.AddScoped<OrganizerProfileService>();
+        builder.Services.AddScoped<EventService>();
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
@@ -57,8 +59,6 @@ public class Program
             });
         }
 
-        app.UseHttpsRedirection();
-
         using (var scope = app.Services.CreateScope())
         {
             await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.EnsureCreatedAsync();
@@ -66,6 +66,7 @@ public class Program
 
         app.UseAuthentication();
         app.UseAuthorization();
+        app.UseHttpsRedirection();
         app.MapControllers();
 
         app.Run();

@@ -55,6 +55,17 @@ mobile/android/app/build/
 *.sqlite3
 *.pem
 *.key
+*.pfx
+*.crt
+*.cer
+*.jks
+*.p12
+
+# Local dev certificate folders
+.https/
+https/
+certs/
+.aspnet/
 
 # Git
 *.orig
