@@ -42,6 +42,15 @@ public class Program
         builder.Services.AddAuthorizationBuilder()
             .AddPolicy("OrganizerOnly", policy => policy.RequireRole(nameof(UserRole.Organizer), nameof(UserRole.PlatformAdmin)))
             .AddPolicy("PlatformAdminOnly", policy => policy.RequireRole(nameof(UserRole.PlatformAdmin)));
+        builder.Services.AddCors(options =>
+        {
+            options.AddPolicy("Frontend", policy =>
+            {
+                policy.AllowAnyHeader().AllowAnyMethod();
+                var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+                if (allowedOrigins.Length > 0) policy.WithOrigins(allowedOrigins);
+            });
+        });
         builder.Services.AddControllers();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
@@ -64,6 +73,7 @@ public class Program
             await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.EnsureCreatedAsync();
         }
 
+        app.UseCors("Frontend");
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseHttpsRedirection();

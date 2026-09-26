@@ -25,6 +25,18 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
         db.Users.Add(user);
         var rawToken = CreateRawToken();
         db.AuthTokens.Add(CreateToken(user.Id, AuthTokenType.EmailVerification, rawToken, TimeSpan.FromHours(24)));
+        if (request.CreateOrganizerProfile)
+        {
+            var organizerName = email[..email.IndexOf('@')];
+            db.OrganizerProfiles.Add(new OrganizerProfile
+            {
+                UserId = user.Id,
+                BusinessName = organizerName,
+                DisplayName = organizerName,
+                ContactEmail = email
+            });
+        }
+
         await db.SaveChangesAsync();
         return (user, rawToken, null);
     }

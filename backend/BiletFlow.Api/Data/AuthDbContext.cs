@@ -53,6 +53,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(e => e.Description).HasMaxLength(4000).IsRequired();
             entity.Property(e => e.Venue).HasMaxLength(250).IsRequired();
             entity.Property(e => e.City).HasMaxLength(120).IsRequired();
+            entity.HasIndex(e => e.Slug).IsUnique();
             entity.HasOne(e => e.Organizer)
                 .WithMany(user => user.Events)
                 .HasForeignKey(e => e.OrganizerId)

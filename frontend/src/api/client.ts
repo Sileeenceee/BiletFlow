@@ -1,5 +1,7 @@
 import { clearSession, getToken } from '../lib/storage'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
+
 export class ApiError extends Error {
   status: number
 
@@ -23,7 +25,7 @@ export async function apiFetch<T>(path: string, options: Options = {}): Promise<
   const { redirectOnUnauthorized = true, ...init } = options
   const token = getToken()
 
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',

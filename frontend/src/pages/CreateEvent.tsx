@@ -3,47 +3,22 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from 'react-router'
 import { z } from 'zod'
-import { fakeCreateEvent } from '../api/events'
+import { createEvent } from '../api/events'
 import { Field, buttonClass, inputClass } from '../components/form'
-
-const CATEGORIES = [
-  'Concert',
-  'Conference',
-  'Workshop',
-  'Sport',
-  'Theatre',
-  'Meetup',
-  'Other',
-] as const
 
 const schema = z
   .object({
     title: z.string().min(3, 'At least 3 characters').max(120, 'At most 120 characters'),
     description: z.string().min(20, 'At least 20 characters'),
-    category: z.string().min(1, 'Pick a category'),
-    venueName: z.string().min(1, 'Required'),
-    venueAddress: z.string().min(1, 'Required'),
+    venue: z.string().min(1, 'Required'),
+    city: z.string().min(1, 'Required'),
     startsAt: z.string().min(1, 'Required'),
     endsAt: z.string().min(1, 'Required'),
-    registrationOpensAt: z.string().min(1, 'Required'),
-    registrationClosesAt: z.string().min(1, 'Required'),
-    visibility: z.enum(['public', 'unlisted', 'private']),
-    capacity: z.number().int('Whole numbers only').positive('Must be greater than 0'),
+    isPublished: z.boolean(),
   })
   .refine((d) => new Date(d.endsAt) > new Date(d.startsAt), {
     message: 'End must be after start',
     path: ['endsAt'],
-  })
-  .refine(
-    (d) => new Date(d.registrationClosesAt) > new Date(d.registrationOpensAt),
-    {
-      message: 'Registration must close after it opens',
-      path: ['registrationClosesAt'],
-    },
-  )
-  .refine((d) => new Date(d.registrationClosesAt) <= new Date(d.startsAt), {
-    message: 'Registration must close before the event starts',
-    path: ['registrationClosesAt'],
   })
 
 type FormValues = z.infer<typeof schema>
@@ -58,13 +33,21 @@ export default function CreateEvent() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { visibility: 'public', capacity: 100, category: '' },
+    defaultValues: { isPublished: false },
   })
 
   async function onSubmit(values: FormValues) {
     setFormError('')
     try {
-      await fakeCreateEvent(values)
+      await createEvent({
+        title: values.title,
+        description: values.description,
+        venue: values.venue,
+        city: values.city,
+        startDateUtc: new Date(values.startsAt).toISOString(),
+        endDateUtc: new Date(values.endsAt).toISOString(),
+        isPublished: values.isPublished,
+      })
       navigate('/events')
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Could not create the event')
@@ -88,28 +71,17 @@ export default function CreateEvent() {
         />
       </Field>
 
-      <Field id="category" label="Category" error={errors.category?.message}>
-        <select id="category" {...register('category')} className={inputClass}>
-          <option value="">Select a category</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </Field>
-
       <fieldset className="space-y-4">
         <legend className="text-sm font-medium mb-1">Venue</legend>
 
-        <Field id="venueName" label="Name" error={errors.venueName?.message}>
-          <input id="venueName" {...register('venueName')} className={inputClass} />
+        <Field id="venue" label="Name" error={errors.venue?.message}>
+          <input id="venue" {...register('venue')} className={inputClass} />
         </Field>
 
-        <Field id="venueAddress" label="Address" error={errors.venueAddress?.message}>
+        <Field id="city" label="City" error={errors.city?.message}>
           <input
-            id="venueAddress"
-            {...register('venueAddress')}
+            id="city"
+            {...register('city')}
             className={inputClass}
           />
         </Field>
@@ -139,56 +111,10 @@ export default function CreateEvent() {
         </div>
       </fieldset>
 
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-medium mb-1">Registration window</legend>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field
-            id="registrationOpensAt"
-            label="Opens"
-            error={errors.registrationOpensAt?.message}
-          >
-            <input
-              id="registrationOpensAt"
-              type="datetime-local"
-              {...register('registrationOpensAt')}
-              className={inputClass}
-            />
-          </Field>
-
-          <Field
-            id="registrationClosesAt"
-            label="Closes"
-            error={errors.registrationClosesAt?.message}
-          >
-            <input
-              id="registrationClosesAt"
-              type="datetime-local"
-              {...register('registrationClosesAt')}
-              className={inputClass}
-            />
-          </Field>
-        </div>
-      </fieldset>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field id="visibility" label="Visibility">
-          <select id="visibility" {...register('visibility')} className={inputClass}>
-            <option value="public">Public</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="private">Private</option>
-          </select>
-        </Field>
-
-        <Field id="capacity" label="Capacity" error={errors.capacity?.message}>
-          <input
-            id="capacity"
-            type="number"
-            {...register('capacity', { valueAsNumber: true })}
-            className={inputClass}
-          />
-        </Field>
-      </div>
+      <label htmlFor="isPublished" className="flex items-center gap-2 text-sm">
+        <input id="isPublished" type="checkbox" {...register('isPublished')} />
+        Publish event now
+      </label>
 
       {formError && (
         <p role="alert" className="text-sm text-red-600">

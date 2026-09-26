@@ -11,6 +11,11 @@ namespace BiletFlow.Api.Controllers;
 [Authorize(Policy = "OrganizerOnly")]
 public sealed class EventController(EventService eventService) : ControllerBase
 {
+    [AllowAnonymous]
+    [HttpGet]
+    public async Task<IActionResult> GetPublishedEvents() =>
+        Ok(await eventService.GetPublishedEventsAsync());
+
     [HttpGet("me")]
     public async Task<IActionResult> GetMyEvents()
     {

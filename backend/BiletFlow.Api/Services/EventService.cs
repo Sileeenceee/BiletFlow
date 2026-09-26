@@ -6,6 +6,14 @@ namespace BiletFlow.Api.Services;
 
 public sealed class EventService(AuthDbContext db)
 {
+    public async Task<IReadOnlyList<Event>> GetPublishedEventsAsync()
+    {
+        return await db.Events
+            .Where(e => e.IsPublished)
+            .OrderBy(e => e.StartDateUtc)
+            .ToListAsync();
+    }
+
     public async Task<IReadOnlyList<Event>> GetOrganizerEventsAsync(Guid organizerId)
     {
         return await db.Events

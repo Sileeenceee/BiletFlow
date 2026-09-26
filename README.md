@@ -36,3 +36,9 @@ BiletFlow uses JWT authentication and role-based authorization. Every account ha
 - Access platform administration endpoints protected by the `PlatformAdminOnly` policy.
 
 Role assignment is controlled by the backend. Public registration can create an `Attendee` account or an `Organizer` account when organizer profile creation is requested; `EventAdmin` and `PlatformAdmin` accounts must be assigned through an administrative workflow.
+
+## Frontend and API configuration
+
+During local development, Vite proxies `/api` requests to `https://localhost:6969`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API origin when building the frontend, and configure the API's `Cors:AllowedOrigins` setting with the exact frontend origin(s). For example, set `Cors__AllowedOrigins__0=https://tickets.example.com` in the API environment. The API does not allow cross-origin requests unless origins are explicitly configured.
+
+For an existing database created with the earlier event schema, apply `backend/BiletFlow.Api/Data/Migrations/001_align_legacy_schema.sql` once before starting the API. It migrates existing event values into the current model, preserves event rows, and removes legacy-only columns.
