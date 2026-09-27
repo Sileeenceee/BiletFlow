@@ -69,3 +69,6 @@ certs/
 
 # Git
 *.orig
+
+# Local reference attachment
+BiletFlow_SRS_Initial_Draft (2).pdf

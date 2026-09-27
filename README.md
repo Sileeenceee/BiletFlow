@@ -42,3 +42,11 @@ Role assignment is controlled by the backend. Public registration can create an 
 During local development, Vite proxies `/api` requests to `https://localhost:6969`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API origin when building the frontend, and configure the API's `Cors:AllowedOrigins` setting with the exact frontend origin(s). For example, set `Cors__AllowedOrigins__0=https://tickets.example.com` in the API environment. The API does not allow cross-origin requests unless origins are explicitly configured.
 
 For an existing database created with the earlier event schema, apply `backend/BiletFlow.Api/Data/Migrations/001_align_legacy_schema.sql` once before starting the API. It migrates existing event values into the current model, preserves event rows, and removes legacy-only columns.
+
+For an existing database, also apply `backend/BiletFlow.Api/Data/Migrations/002_ticketing.sql` after migration `001` to add ticket types, inventory, orders, simulated payments, and issued tickets. A fresh database is created from the current EF Core model automatically.
+
+## Ticketing API
+
+- Organizers manage ticket types at `/api/events/{eventId}/ticket-types` and enable paid ticket sales for demonstration through `/api/events/{eventId}/paid-sales/activate-simulation`. The latter is explicitly a simulation and does not verify identity, collect an activation fee, or configure real payouts.
+- Authenticated attendees submit `POST /api/orders/checkout` with an event, attendee details, and ticket type quantities. Free orders complete without a payment record; paid orders create a clearly labelled simulated payment. Inventory is checked and updated in a serializable transaction.
+- Attendees can list their orders at `/api/orders/me`; order and ticket QR access is limited to the attendee, the event organizer, or a platform administrator. Checkout responses include each ticket's opaque QR payload and PNG data URI.

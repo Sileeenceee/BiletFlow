@@ -41,7 +41,15 @@ services:
       openssl pkcs12 -export -out /https/devcert.pfx -inkey /https/dev.key -in /https/dev.crt -password pass:changeit >/dev/null 2>&1 &&
       exec dotnet BiletFlow.Api.dll"
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -fsS https://localhost:6969/swagger/index.html >/dev/null || exit 1"]
+      test:
+        - CMD
+        - /usr/bin/bash
+        - -c
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/6767
+          printf 'GET /swagger/index.html HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          IFS= read -r status <&3
+          [[ "$$status" == *" 200 OK"* ]]
       interval: 15s
       timeout: 5s
       retries: 10
