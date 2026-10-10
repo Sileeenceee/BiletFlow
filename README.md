@@ -61,3 +61,7 @@ Refresh tokens are stored in the existing `AuthTokens` table, so no schema migra
 - Organizers manage ticket types at `/api/events/{eventId}/ticket-types` and enable paid ticket sales for demonstration through `/api/events/{eventId}/paid-sales/activate-simulation`. The latter is explicitly a simulation and does not verify identity, collect an activation fee, or configure real payouts.
 - Authenticated attendees submit `POST /api/orders/checkout` with an event, attendee details, and ticket type quantities. Free orders complete without a payment record; paid orders create a clearly labelled simulated payment. Inventory is checked and updated in a serializable transaction.
 - Attendees can list their orders at `/api/orders/me`; order and ticket QR access is limited to the attendee, the event organizer, or a platform administrator. Checkout responses include each ticket's opaque QR payload and PNG data URI.
+
+## BiletFlow Figma Design
+
+https://www.figma.com/design/Uw6KZTD3dWojTLt0fClabK/BiletFlow?node-id=1-231&t=pUI9oK7fLgUo1T43-1 
