@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace BiletFlow.Api.Models;
 
 public enum UserRole { Attendee, Organizer, EventAdmin, PlatformAdmin }
-public enum AuthTokenType { EmailVerification, PasswordReset }
+public enum AuthTokenType { EmailVerification, PasswordReset, RefreshToken }
 public enum OrderStatus { Completed, Cancelled, Refunded }
 public enum TicketStatus { Valid, CheckedIn, Cancelled, Refunded }
 public enum PaymentStatus { SimulationSucceeded }

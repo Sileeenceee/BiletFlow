@@ -13,6 +13,7 @@ namespace BiletFlow.Api.Services;
 public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passwordHasher, IConfiguration configuration, IHostEnvironment environment)
 {
     private const int TokenLifetimeMinutes = 60;
+    private const int RefreshTokenLifetimeDays = 7;
 
     public async Task<(AppUser? User, string? VerificationToken, string? Error)> RegisterAsync(RegisterRequest request)
     {
@@ -46,7 +47,7 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
         var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Email == NormalizeEmail(request.Email));
         if (user is null || user.IsSuspended) return (null, "Invalid email or password.");
         if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed) return (null, "Invalid email or password.");
-        return (CreateAuthResponse(user), null);
+        return (await CreateAuthResponseAsync(user), null);
     }
 
     public async Task<bool> VerifyEmailAsync(string rawToken)
@@ -77,20 +78,64 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
         token.User.PasswordHash = passwordHasher.HashPassword(token.User, request.NewPassword);
         token.UsedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+        // A new password ends every existing session, so a stolen refresh token stops working.
+        await RevokeRefreshTokensAsync(token.User.Id);
         return true;
     }
 
+    public async Task<AuthResponse?> RefreshAsync(string rawToken)
+    {
+        var tokenHash = HashToken(rawToken);
+        var stored = await db.AuthTokens.Include(token => token.User)
+            .SingleOrDefaultAsync(token => token.Type == AuthTokenType.RefreshToken && token.TokenHash == tokenHash);
+        if (stored is null || stored.ExpiresAt <= DateTimeOffset.UtcNow) return null;
+
+        // A refresh token works once. Seeing a used one again means it was copied,
+        // so end every session of this user.
+        if (stored.UsedAt is not null)
+        {
+            await RevokeRefreshTokensAsync(stored.UserId);
+            return null;
+        }
+
+        if (stored.User.IsSuspended) return null;
+
+        // Claim the token in one statement: of two parallel requests with the same token, only one gets 1 row.
+        var claimed = await db.AuthTokens
+            .Where(token => token.Id == stored.Id && token.UsedAt == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
+        return claimed == 1 ? await CreateAuthResponseAsync(stored.User) : null;
+    }
+
+    public async Task LogoutAsync(string rawToken)
+    {
+        var tokenHash = HashToken(rawToken);
+        await db.AuthTokens
+            .Where(token => token.Type == AuthTokenType.RefreshToken && token.TokenHash == tokenHash && token.UsedAt == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
+    }
+
+    public Task<AppUser?> GetUserAsync(Guid userId) => db.Users.SingleOrDefaultAsync(user => user.Id == userId);
+
     public bool IsDevelopment => environment.IsDevelopment();
 
-    private AuthResponse CreateAuthResponse(AppUser user)
+    private async Task<AuthResponse> CreateAuthResponseAsync(AppUser user)
     {
+        var refreshToken = CreateRawToken();
+        db.AuthTokens.Add(CreateToken(user.Id, AuthTokenType.RefreshToken, refreshToken, TimeSpan.FromDays(RefreshTokenLifetimeDays)));
+        await db.SaveChangesAsync();
+
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(TokenLifetimeMinutes);
         var key = configuration["Jwt:SigningKey"] ?? throw new InvalidOperationException("Jwt:SigningKey is not configured.");
         var claims = new[] { new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()), new Claim(JwtRegisteredClaimNames.Email, user.Email), new Claim(ClaimTypes.Role, user.Role.ToString()), new Claim("email_verified", user.EmailConfirmed.ToString().ToLowerInvariant()) };
         var credentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)), SecurityAlgorithms.HmacSha256);
         var jwt = new JwtSecurityToken(claims: claims, expires: expiresAt.UtcDateTime, signingCredentials: credentials);
-        return new AuthResponse(new JwtSecurityTokenHandler().WriteToken(jwt), expiresAt, user.Id, user.Email, user.Role.ToString(), user.EmailConfirmed);
+        return new AuthResponse(new JwtSecurityTokenHandler().WriteToken(jwt), expiresAt, user.Id, user.Email, user.Role.ToString(), user.EmailConfirmed, refreshToken);
     }
+
+    private Task<int> RevokeRefreshTokensAsync(Guid userId) => db.AuthTokens
+        .Where(token => token.UserId == userId && token.Type == AuthTokenType.RefreshToken && token.UsedAt == null)
+        .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
 
     private async Task<AuthToken?> FindUsableTokenAsync(string rawToken, AuthTokenType type) => await db.AuthTokens.Include(token => token.User).SingleOrDefaultAsync(token => token.Type == type && token.TokenHash == HashToken(rawToken) && token.UsedAt == null && token.ExpiresAt > DateTimeOffset.UtcNow);
     private static AuthToken CreateToken(Guid userId, AuthTokenType type, string rawToken, TimeSpan lifetime) => new() { UserId = userId, Type = type, TokenHash = HashToken(rawToken), ExpiresAt = DateTimeOffset.UtcNow.Add(lifetime) };

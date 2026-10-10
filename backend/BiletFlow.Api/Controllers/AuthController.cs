@@ -33,6 +33,20 @@ public sealed class AuthController(AuthService service) : ControllerBase
         return result.Response is null ? Unauthorized() : Ok(result.Response);
     }
 
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh(RefreshRequest request)
+    {
+        var response = await service.RefreshAsync(request.RefreshToken);
+        return response is null ? Unauthorized() : Ok(response);
+    }
+
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout(RefreshRequest request)
+    {
+        await service.LogoutAsync(request.RefreshToken);
+        return NoContent();
+    }
+
     [HttpPost("verify-email")]
     public async Task<IActionResult> VerifyEmail(VerifyEmailRequest request) =>
         await service.VerifyEmailAsync(request.Token)
@@ -58,11 +72,21 @@ public sealed class AuthController(AuthService service) : ControllerBase
 
     [Authorize]
     [HttpGet("me")]
-    public IActionResult Me() => Ok(new
+    public async Task<IActionResult> Me()
     {
-        UserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value,
-        Email = User.FindFirst(ClaimTypes.Email)?.Value,
-        Role = User.FindFirst(ClaimTypes.Role)?.Value,
-        EmailConfirmed = User.FindFirst("email_verified")?.Value == "true"
-    });
+        // Read the database, not the token: role and email status in a token are frozen at sign-in.
+        var userIdText = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(userIdText, out var userId)) return Unauthorized();
+
+        var user = await service.GetUserAsync(userId);
+        if (user is null || user.IsSuspended) return Unauthorized();
+
+        return Ok(new
+        {
+            UserId = user.Id,
+            user.Email,
+            Role = user.Role.ToString(),
+            user.EmailConfirmed
+        });
+    }
 }

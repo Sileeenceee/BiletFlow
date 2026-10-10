@@ -1,11 +1,13 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import type { Session } from '../api/auth'
-import { clearSession, getStoredUser, saveSession, type StoredUser } from './storage'
+import { clearSession, getStoredUser, saveSession, updateStoredUser, type StoredUser } from './storage'
 
 type AuthContextValue = {
   user: StoredUser | null
   signIn: (session: Session) => void
   signOut: () => void
+  /** Changes fields of the signed-in user (e.g. emailConfirmed) without a new sign-in. */
+  updateUser: (patch: Partial<StoredUser>) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -24,8 +26,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  function updateUser(patch: Partial<StoredUser>) {
+    const updated = updateStoredUser(patch)
+    if (updated) setUser(updated)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, signIn, signOut, updateUser }}>
       {children}
     </AuthContext.Provider>
   )

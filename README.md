@@ -45,6 +45,15 @@ For an existing database created with the earlier event schema, apply `backend/B
 
 For an existing database, also apply `backend/BiletFlow.Api/Data/Migrations/002_ticketing.sql` after migration `001` to add ticket types, inventory, orders, simulated payments, and issued tickets. A fresh database is created from the current EF Core model automatically.
 
+Refresh tokens are stored in the existing `AuthTokens` table, so no schema migration is needed for them.
+
+## Authentication API
+
+- `POST /api/auth/login` returns a short-lived `accessToken` (60 minutes) and a `refreshToken` (7 days). Send the access token as `Authorization: Bearer <token>`.
+- `POST /api/auth/refresh` with `{ "refreshToken": "..." }` returns a new access/refresh pair and invalidates the refresh token that was sent. Role, suspension, and email-verification status are read from the database at this point, so the new access token is current. A refresh token that was already used, expired, or revoked gets `401`; presenting an already-used one also ends every refresh session of that user, because it means the token was copied.
+- `POST /api/auth/logout` with `{ "refreshToken": "..." }` revokes that refresh token and returns `204`. Resetting a password revokes all of the user's refresh tokens.
+- `GET /api/auth/me` returns the current user's data from the database (not from the token), so it reflects a verified email or a changed role immediately. It returns `401` for a suspended user.
+
 ## Ticketing API
 
 - Organizers manage ticket types at `/api/events/{eventId}/ticket-types` and enable paid ticket sales for demonstration through `/api/events/{eventId}/paid-sales/activate-simulation`. The latter is explicitly a simulation and does not verify identity, collect an activation fee, or configure real payouts.

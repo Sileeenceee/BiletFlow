@@ -1,16 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { verifyEmail } from '../api/auth'
+import { getCurrentUser, verifyEmail } from '../api/auth'
 import { buttonClass, inputClass } from '../components/form'
+import { useAuth } from '../lib/auth'
 
 type Status = 'idle' | 'working' | 'done' | 'failed'
 
 export default function VerifyEmail() {
+  const { user, updateUser } = useAuth()
   const [params] = useSearchParams()
   const [token, setToken] = useState(params.get('token') ?? '')
   const [status, setStatus] = useState<Status>('idle')
   const [message, setMessage] = useState('')
   const autoRan = useRef(false)
+
+  // The "email is not verified" banner reads the user stored at sign-in, which is now
+  // out of date. Ask the API (it reads the database) and update the stored user.
+  async function syncEmailConfirmed() {
+    if (!user) return
+    try {
+      const me = await getCurrentUser()
+      updateUser({ emailConfirmed: me.emailConfirmed })
+    } catch {
+      // Verification itself succeeded; the banner will clear at the next sign-in.
+    }
+  }
 
   async function submit(value: string) {
     if (!value.trim()) return
@@ -20,6 +34,7 @@ export default function VerifyEmail() {
       const res = await verifyEmail(value.trim())
       setMessage(res.message)
       setStatus('done')
+      await syncEmailConfirmed()
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Verification failed')
       setStatus('failed')

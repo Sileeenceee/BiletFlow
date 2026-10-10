@@ -48,6 +48,16 @@ export function saveSession(token: string, expiresAt: string, user: StoredUser) 
   localStorage.setItem(SESSION_KEY, JSON.stringify({ token, expiresAt, user }))
 }
 
+/** Updates the stored user (e.g. emailConfirmed) while keeping the token and its expiry. */
+export function updateStoredUser(patch: Partial<StoredUser>): StoredUser | null {
+  const session = readSession()
+  if (!session) return null
+
+  const user = { ...session.user, ...patch }
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, user }))
+  return user
+}
+
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY)
 }

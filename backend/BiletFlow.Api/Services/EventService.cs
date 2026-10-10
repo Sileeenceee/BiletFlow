@@ -32,11 +32,18 @@ public sealed class EventService(AuthDbContext db)
             return (null, "Only organizers can create events.");
         }
 
+        // Same limits as the create-event form, plus the column sizes in AuthDbContext.
         var title = request.Title.Trim();
-        if (string.IsNullOrWhiteSpace(title)) return (null, "Title is required.");
+        if (title.Length is < 3 or > 120) return (null, "Title must be between 3 and 120 characters.");
 
         var description = request.Description.Trim();
-        if (string.IsNullOrWhiteSpace(description)) return (null, "Description is required.");
+        if (description.Length is < 20 or > 4000) return (null, "Description must be between 20 and 4000 characters.");
+
+        var venue = request.Venue.Trim();
+        if (venue.Length is < 1 or > 250) return (null, "Venue is required and must be at most 250 characters.");
+
+        var city = request.City.Trim();
+        if (city.Length is < 1 or > 120) return (null, "City is required and must be at most 120 characters.");
 
         if (request.StartDateUtc >= request.EndDateUtc) return (null, "Event end date must be after the start date.");
 
@@ -49,8 +56,8 @@ public sealed class EventService(AuthDbContext db)
             Title = title,
             Slug = await GenerateUniqueSlugAsync(slug),
             Description = description,
-            Venue = request.Venue.Trim(),
-            City = request.City.Trim(),
+            Venue = venue,
+            City = city,
             StartDateUtc = request.StartDateUtc,
             EndDateUtc = request.EndDateUtc,
             IsPublished = request.IsPublished,
