@@ -41,6 +41,8 @@ Role assignment is controlled by the backend. Public registration can create an 
 
 During local development, Vite proxies `/api` requests to `https://localhost:6969`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API origin when building the frontend, and configure the API's `Cors:AllowedOrigins` setting with the exact frontend origin(s). For example, set `Cors__AllowedOrigins__0=https://tickets.example.com` in the API environment. The API does not allow cross-origin requests unless origins are explicitly configured.
 
+To build and run the frontend, API, and database in Docker, run `docker compose up --build` from the repository root. Open the frontend at `http://localhost:8080`; its `/api` requests are proxied to the API container.
+
 For an existing database created with the earlier event schema, apply `backend/BiletFlow.Api/Data/Migrations/001_align_legacy_schema.sql` once before starting the API. It migrates existing event values into the current model, preserves event rows, and removes legacy-only columns.
 
 For an existing database, also apply `backend/BiletFlow.Api/Data/Migrations/002_ticketing.sql` after migration `001` to add ticket types, inventory, orders, simulated payments, and issued tickets. A fresh database is created from the current EF Core model automatically.
