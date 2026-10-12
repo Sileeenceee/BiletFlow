@@ -4,9 +4,11 @@ namespace BiletFlow.Api.Models;
 
 public enum UserRole { Attendee, Organizer, EventAdmin, PlatformAdmin }
 public enum AuthTokenType { EmailVerification, PasswordReset, RefreshToken }
-public enum OrderStatus { Completed, Cancelled, Refunded }
+public enum OrderStatus { Pending, Confirmed, Cancelled, Refunded }
 public enum TicketStatus { Valid, CheckedIn, Cancelled, Refunded }
-public enum PaymentStatus { SimulationSucceeded }
+public enum PaymentStatus { Pending, Succeeded, Failed }
+public enum PaidSalesStatus { None, Pending, Active, Suspended }
+public enum AuditActionType { OrderCreated, PaymentSucceeded, PaymentFailed, OrderCancelled, OrderExpired, PaidSalesActivated, PaidSalesSuspended }
 
 public sealed class AppUser
 {
@@ -45,9 +47,6 @@ public sealed class OrganizerProfile
     public string BusinessName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? ContactEmail { get; set; }
-    public string? PhoneNumber { get; set; }
-    public string? Bio { get; set; }
-    public string? Website { get; set; }
     public bool IsVerified { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
@@ -67,7 +66,13 @@ public sealed class Event
     public DateTimeOffset StartDateUtc { get; set; }
     public DateTimeOffset EndDateUtc { get; set; }
     public bool IsPublished { get; set; }
-    public bool PaidSalesActivated { get; set; }
+    /// <summary>Maximum number of tickets for the whole event; null means unlimited.</summary>
+    public int? Capacity { get; set; }
+    public int TicketsIssued { get; set; }
+    public int TicketsReserved { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public PaidSalesStatus PaidSalesStatus { get; set; } = PaidSalesStatus.None;
+    public bool PaidTermsAccepted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
     [JsonIgnore]
@@ -87,6 +92,7 @@ public sealed class TicketType
     public decimal Price { get; set; }
     public int Quantity { get; set; }
     public int SoldQuantity { get; set; }
+    public int ReservedQuantity { get; set; }
     public DateTimeOffset? SalesStartAt { get; set; }
     public DateTimeOffset? SalesEndAt { get; set; }
     public int MaxPerOrder { get; set; } = 10;
@@ -105,13 +111,17 @@ public sealed class Order
     public Guid EventId { get; set; }
     [JsonIgnore]
     public Event Event { get; set; } = null!;
-    public OrderStatus Status { get; set; } = OrderStatus.Completed;
+    public required string AttendeeName { get; set; }
+    public required string AttendeeEmail { get; set; }
+    public OrderStatus Status { get; set; } = OrderStatus.Pending;
+    public decimal DiscountTotal { get; set; }
+    public decimal FeeTotal { get; set; }
     public decimal Total { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     [JsonIgnore]
     public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
     [JsonIgnore]
-    public Payment? Payment { get; set; }
+    public ICollection<Payment> Payments { get; set; } = new List<Payment>();
 }
 
 public sealed class OrderItem
@@ -124,10 +134,11 @@ public sealed class OrderItem
     [JsonIgnore]
     public TicketType TicketType { get; set; } = null!;
     public required string TicketTypeName { get; set; }
-    public int Quantity { get; set; }
     public decimal UnitPrice { get; set; }
+    public decimal DiscountAmount { get; set; }
+    /// <summary>Created only after the order is confirmed (free checkout or successful payment).</summary>
     [JsonIgnore]
-    public ICollection<Ticket> Tickets { get; set; } = new List<Ticket>();
+    public Ticket? Ticket { get; set; }
 }
 
 public sealed class Ticket
@@ -136,11 +147,13 @@ public sealed class Ticket
     public Guid OrderItemId { get; set; }
     [JsonIgnore]
     public OrderItem OrderItem { get; set; } = null!;
+    public Guid EventId { get; set; }
+    [JsonIgnore]
+    public Event Event { get; set; } = null!;
     public required string Code { get; set; }
     public required string AttendeeName { get; set; }
     public required string AttendeeEmail { get; set; }
     public TicketStatus Status { get; set; } = TicketStatus.Valid;
-    public DateTimeOffset IssuedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public sealed class Payment
@@ -150,7 +163,19 @@ public sealed class Payment
     [JsonIgnore]
     public Order Order { get; set; } = null!;
     public decimal Amount { get; set; }
-    public PaymentStatus Status { get; set; } = PaymentStatus.SimulationSucceeded;
-    public required string ProviderReference { get; set; }
+    public PaymentStatus Status { get; set; } = PaymentStatus.Pending;
+    public bool IsSimulated { get; set; } = true;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class AuditLog
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid? EventId { get; set; }
+    public Guid? ActorUserId { get; set; }
+    public AuditActionType ActionType { get; set; }
+    public required string EntityType { get; set; }
+    public Guid? EntityId { get; set; }
+    public required string Description { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

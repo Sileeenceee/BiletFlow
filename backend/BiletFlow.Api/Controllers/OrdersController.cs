@@ -28,6 +28,49 @@ public sealed class OrdersController(TicketingService ticketingService) : Contro
         return CreatedAtAction(nameof(GetById), new { orderId = result.Order.Id }, result.Order);
     }
 
+    /// <summary>Payment simulation: body { "outcome": "succeeded" | "failed" }.</summary>
+    [HttpPost("{orderId:guid}/pay")]
+    public async Task<IActionResult> Pay(Guid orderId, [FromBody] PayOrderRequest? request)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.PayOrderAsync(orderId, userId.Value, request?.Outcome);
+        return ToActionResult(result.Order, result.Error, result.Kind);
+    }
+
+    [HttpPost("{orderId:guid}/cancel")]
+    public async Task<IActionResult> Cancel(Guid orderId)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.CancelOwnOrderAsync(orderId, userId.Value);
+        return ToActionResult(result.Order, result.Error, result.Kind);
+    }
+
+    [HttpPost("/api/events/{eventId:guid}/orders/{orderId:guid}/cancel")]
+    [Authorize(Policy = "OrganizerOnly")]
+    public async Task<IActionResult> CancelFreeOrder(Guid eventId, Guid orderId)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.CancelFreeOrderAsync(eventId, orderId, userId.Value, IsPlatformAdmin());
+        return ToActionResult(result.Order, result.Error, result.Kind);
+    }
+
+    [HttpGet("/api/events/{eventId:guid}/attendees")]
+    [Authorize(Policy = "OrganizerOnly")]
+    public async Task<IActionResult> GetAttendees(Guid eventId, [FromQuery] string? search)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var attendees = await ticketingService.GetAttendeesAsync(eventId, userId.Value, IsPlatformAdmin(), search);
+        return attendees is null ? NotFound() : Ok(attendees);
+    }
+
     [HttpGet("me")]
     public async Task<IActionResult> GetMyOrders()
     {
@@ -66,6 +109,15 @@ public sealed class OrdersController(TicketingService ticketingService) : Contro
         var qrImage = await ticketingService.GetTicketQrAsync(ticketId, userId.Value, IsPlatformAdmin());
         return qrImage is null ? NotFound() : File(qrImage, "image/png", $"ticket-{ticketId}.png");
     }
+
+    private IActionResult ToActionResult(OrderResponse? order, string? error, ServiceError kind) => order is not null
+        ? Ok(order)
+        : kind switch
+        {
+            ServiceError.NotFound => NotFound(new { error }),
+            ServiceError.Conflict => Conflict(new { error }),
+            _ => BadRequest(new { error })
+        };
 
     private Guid? GetCurrentUserId()
     {

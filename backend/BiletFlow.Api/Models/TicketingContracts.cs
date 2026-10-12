@@ -87,9 +87,12 @@ public sealed record TicketTypeResponse(
     DateTimeOffset? SalesStartAt,
     DateTimeOffset? SalesEndAt,
     int MaxPerOrder,
-    bool IsHidden);
+    bool IsHidden,
+    int ReservedQuantity = 0,
+    int RefundedQuantity = 0,
+    int CheckedInQuantity = 0);
 
-/// <summary>Issued ticket and its QR image encoded as a data URI.</summary>
+/// <summary>Issued ticket; the QR image data URI is filled only for single-order and checkout/pay responses.</summary>
 public sealed record TicketResponse(
     Guid Id,
     string Code,
@@ -97,7 +100,7 @@ public sealed record TicketResponse(
     string AttendeeName,
     string AttendeeEmail,
     string TicketTypeName,
-    string QrCodeDataUri);
+    string? QrCodeDataUri);
 
 /// <summary>Order line containing its issued tickets.</summary>
 public sealed record OrderItemResponse(
@@ -116,7 +119,30 @@ public sealed record OrderResponse(
     string PaymentMode,
     decimal Total,
     DateTimeOffset CreatedAt,
-    IReadOnlyList<OrderItemResponse> Items);
+    IReadOnlyList<OrderItemResponse> Items,
+    decimal DiscountTotal = 0,
+    decimal FeeTotal = 0,
+    DateTimeOffset? ExpiresAt = null,
+    string? PaymentStatus = null);
+
+/// <summary>Request to pay a pending order in the payment simulation.</summary>
+public sealed record PayOrderRequest
+{
+    /// <summary>"succeeded" (default) or "failed".</summary>
+    public string? Outcome { get; init; }
+}
+
+/// <summary>Ticket holder row for the organizer attendee list.</summary>
+public sealed record AttendeeResponse(
+    Guid TicketId,
+    Guid OrderId,
+    string AttendeeName,
+    string AttendeeEmail,
+    string TicketTypeName,
+    string Status);
+
+/// <summary>Kind of failure returned by order actions so controllers can pick the HTTP status.</summary>
+public enum ServiceError { None, BadRequest, NotFound, Conflict }
 
 /// <summary>Request to enable paid sales in the clearly labelled academic simulation.</summary>
 public sealed record ActivatePaidSalesSimulationRequest

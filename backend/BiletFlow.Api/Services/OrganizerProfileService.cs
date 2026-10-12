@@ -41,9 +41,6 @@ public sealed class OrganizerProfileService(AuthDbContext db)
                 BusinessName = businessName,
                 DisplayName = displayName,
                 ContactEmail = string.IsNullOrWhiteSpace(request.ContactEmail) ? user.Email : request.ContactEmail.Trim(),
-                PhoneNumber = request.PhoneNumber?.Trim(),
-                Bio = request.Bio?.Trim(),
-                Website = request.Website?.Trim(),
                 IsVerified = false,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
@@ -57,9 +54,6 @@ public sealed class OrganizerProfileService(AuthDbContext db)
         existing.BusinessName = businessName;
         existing.DisplayName = displayName;
         existing.ContactEmail = string.IsNullOrWhiteSpace(request.ContactEmail) ? user.Email : request.ContactEmail.Trim();
-        existing.PhoneNumber = request.PhoneNumber?.Trim();
-        existing.Bio = request.Bio?.Trim();
-        existing.Website = request.Website?.Trim();
         existing.UpdatedAt = DateTimeOffset.UtcNow;
 
         await db.SaveChangesAsync();

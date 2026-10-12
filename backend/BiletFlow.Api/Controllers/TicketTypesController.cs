@@ -71,7 +71,7 @@ public sealed class TicketTypesController(TicketingService ticketingService) : C
             request.ConfirmSimulationOnly);
         if (!activated)
         {
-            return BadRequest(new { error = "The event must exist and have at least one paid ticket type." });
+            return BadRequest(new { error = "The event must exist, have at least one paid ticket type and not be suspended." });
         }
 
         return Ok(new { eventId, paidSalesActivated = true, paymentMode = "Simulation" });

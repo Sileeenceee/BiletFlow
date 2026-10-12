@@ -47,6 +47,8 @@ public sealed class EventService(AuthDbContext db)
 
         if (request.StartDateUtc >= request.EndDateUtc) return (null, "Event end date must be after the start date.");
 
+        if (request.Capacity is < 1) return (null, "Capacity must be at least 1 or left empty for unlimited.");
+
         var slug = GenerateSlug(title);
         if (string.IsNullOrWhiteSpace(slug)) return (null, "A valid title is required.");
 
@@ -61,6 +63,7 @@ public sealed class EventService(AuthDbContext db)
             StartDateUtc = request.StartDateUtc,
             EndDateUtc = request.EndDateUtc,
             IsPublished = request.IsPublished,
+            Capacity = request.Capacity,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

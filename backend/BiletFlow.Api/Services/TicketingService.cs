@@ -8,8 +8,11 @@ using QRCoder;
 
 namespace BiletFlow.Api.Services;
 
-public sealed class TicketingService(AuthDbContext db)
+public sealed class TicketingService(AuthDbContext db, AuditService audit)
 {
+    /// <summary>How long inventory stays reserved for an unpaid order.</summary>
+    public static readonly TimeSpan ReservationTime = TimeSpan.FromMinutes(15);
+
     public async Task<IReadOnlyList<TicketTypeResponse>?> GetTicketTypesAsync(Guid eventId, Guid? requesterId, bool isPlatformAdmin)
     {
         var ev = await db.Events.SingleOrDefaultAsync(candidate => candidate.Id == eventId);
@@ -23,7 +26,8 @@ public sealed class TicketingService(AuthDbContext db)
             .OrderBy(ticketType => ticketType.Price)
             .ThenBy(ticketType => ticketType.Name)
             .ToListAsync();
-        return ticketTypes.Select(ToTicketTypeResponse).ToList();
+        var counts = await GetStatusCountsAsync(eventId);
+        return ticketTypes.Select(ticketType => ToTicketTypeResponse(ticketType, counts)).ToList();
     }
 
     public async Task<(TicketTypeResponse? TicketType, string? Error)> CreateTicketTypeAsync(
@@ -51,7 +55,7 @@ public sealed class TicketingService(AuthDbContext db)
         };
         db.TicketTypes.Add(ticketType);
         await db.SaveChangesAsync();
-        return (ToTicketTypeResponse(ticketType), null);
+        return (ToTicketTypeResponse(ticketType, null), null);
     }
 
     public async Task<(TicketTypeResponse? TicketType, string? Error)> UpdateTicketTypeAsync(
@@ -71,7 +75,11 @@ public sealed class TicketingService(AuthDbContext db)
                 candidate.Id == ticketTypeId && candidate.EventId == eventId);
             if (ticketType is null) return (null, "Ticket type not found.");
             if (!IsValidSalesWindow(request.SalesStartAt, request.SalesEndAt)) return (null, "Sales end must be after sales start.");
-            if (request.Quantity < ticketType.SoldQuantity) return (null, "Quantity cannot be lower than the number of tickets already sold.");
+            if (request.Quantity < ticketType.SoldQuantity + ticketType.ReservedQuantity)
+            {
+                return (null, "Quantity cannot be lower than the number of tickets already sold or reserved.");
+            }
+
             if (string.IsNullOrWhiteSpace(request.Name)) return (null, "Ticket type name is required.");
 
             ticketType.Name = request.Name.Trim();
@@ -84,7 +92,7 @@ public sealed class TicketingService(AuthDbContext db)
             ticketType.IsHidden = request.IsHidden;
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
-            return (ToTicketTypeResponse(ticketType), null);
+            return (ToTicketTypeResponse(ticketType, await GetStatusCountsAsync(eventId)), null);
         }
         catch (Exception exception) when (IsSerializationConflict(exception))
         {
@@ -105,8 +113,25 @@ public sealed class TicketingService(AuthDbContext db)
             return false;
         }
 
-        ev.PaidSalesActivated = true;
+        // Only a platform admin may lift a suspension.
+        if (ev.PaidSalesStatus == PaidSalesStatus.Suspended && !isPlatformAdmin) return false;
+
+        ev.PaidSalesStatus = PaidSalesStatus.Active;
+        ev.PaidTermsAccepted = true;
         ev.UpdatedAt = DateTimeOffset.UtcNow;
+        audit.Add(AuditActionType.PaidSalesActivated, nameof(Event), ev.Id, ev.Id, organizerId, "Paid sales activated (simulation).");
+        await db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> SuspendPaidSalesAsync(Guid adminId, Guid eventId)
+    {
+        var ev = await db.Events.SingleOrDefaultAsync(candidate => candidate.Id == eventId);
+        if (ev is null) return false;
+
+        ev.PaidSalesStatus = PaidSalesStatus.Suspended;
+        ev.UpdatedAt = DateTimeOffset.UtcNow;
+        audit.Add(AuditActionType.PaidSalesSuspended, nameof(Event), ev.Id, ev.Id, adminId, "Paid sales suspended by a platform administrator.");
         await db.SaveChangesAsync();
         return true;
     }
@@ -132,16 +157,20 @@ public sealed class TicketingService(AuthDbContext db)
         try
         {
             await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-            var ev = await db.Events.SingleOrDefaultAsync(candidate => candidate.Id == request.EventId);
+            var (ev, ticketTypes) = await LoadInventoryAsync(request.EventId);
             if (ev is null || !ev.IsPublished) return (null, "Published event not found.", false);
 
-            var selectedIds = request.Items.Select(item => item.TicketTypeId).ToArray();
-            var ticketTypes = await db.TicketTypes
-                .Where(ticketType => ticketType.EventId == ev.Id && selectedIds.Contains(ticketType.Id))
-                .ToDictionaryAsync(ticketType => ticketType.Id);
-            if (ticketTypes.Count != request.Items.Count) return (null, "One or more ticket types are unavailable.", false);
-
             var now = DateTimeOffset.UtcNow;
+            if (ev.EndDateUtc <= now) return (null, "This event has already ended.", false);
+
+            // Unpaid orders whose reservation ran out give their tickets back before we count what is left.
+            await ReleaseExpiredOrdersAsync(ev, ticketTypes);
+
+            if (request.Items.Any(item => !ticketTypes.ContainsKey(item.TicketTypeId)))
+            {
+                return (null, "One or more ticket types are unavailable.", false);
+            }
+
             foreach (var selection in request.Items)
             {
                 var ticketType = ticketTypes[selection.TicketTypeId];
@@ -157,21 +186,30 @@ public sealed class TicketingService(AuthDbContext db)
                     return (null, $"Ticket type '{ticketType.Name}' exceeds its per-order limit.", false);
                 }
 
-                if (selection.Quantity > ticketType.Quantity - ticketType.SoldQuantity)
+                if (selection.Quantity > ticketType.Quantity - ticketType.SoldQuantity - ticketType.ReservedQuantity)
                 {
                     return (null, $"Ticket type '{ticketType.Name}' has insufficient inventory.", true);
                 }
 
-                if (ticketType.Price > 0 && !ev.PaidSalesActivated)
+                if (ticketType.Price > 0 && ev.PaidSalesStatus != PaidSalesStatus.Active)
                 {
                     return (null, "Paid sales have not been activated for this event.", false);
                 }
+            }
+
+            var totalQuantity = request.Items.Sum(selection => selection.Quantity);
+            if (ev.Capacity is not null && totalQuantity > ev.Capacity.Value - ev.TicketsIssued - ev.TicketsReserved)
+            {
+                return (null, "The event does not have enough remaining capacity.", true);
             }
 
             var order = new Order
             {
                 AttendeeId = attendeeId,
                 EventId = ev.Id,
+                AttendeeName = request.AttendeeName.Trim(),
+                AttendeeEmail = request.AttendeeEmail.Trim().ToLowerInvariant(),
+                Status = OrderStatus.Pending,
                 Total = request.Items.Sum(selection => ticketTypes[selection.TicketTypeId].Price * selection.Quantity),
                 CreatedAt = now
             };
@@ -183,49 +221,201 @@ public sealed class TicketingService(AuthDbContext db)
             foreach (var selection in request.Items)
             {
                 var ticketType = ticketTypes[selection.TicketTypeId];
-                ticketType.SoldQuantity += selection.Quantity;
-                var item = new OrderItem
-                {
-                    Order = order,
-                    TicketTypeId = ticketType.Id,
-                    TicketTypeName = ticketType.Name,
-                    Quantity = selection.Quantity,
-                    UnitPrice = ticketType.Price
-                };
-
                 for (var index = 0; index < selection.Quantity; index++)
                 {
-                    item.Tickets.Add(new Ticket
+                    order.Items.Add(new OrderItem
                     {
-                        Code = CreateTicketCode(),
-                        AttendeeName = request.AttendeeName.Trim(),
-                        AttendeeEmail = request.AttendeeEmail.Trim().ToLowerInvariant(),
-                        IssuedAt = now
+                        Order = order,
+                        TicketTypeId = ticketType.Id,
+                        TicketTypeName = ticketType.Name,
+                        UnitPrice = ticketType.Price
                     });
                 }
-
-                order.Items.Add(item);
             }
 
-            if (order.Total > 0)
-            {
-                order.Payment = new Payment
-                {
-                    Amount = order.Total,
-                    ProviderReference = $"SIM-{Guid.NewGuid():N}",
-                    CreatedAt = now
-                };
-            }
-
+            AdjustCounters(ev, ticketTypes, order.Items, reservedSign: 1, soldSign: 0);
             db.Orders.Add(order);
+            audit.Add(AuditActionType.OrderCreated, nameof(Order), order.Id, ev.Id, attendeeId,
+                $"Order created: {totalQuantity} ticket(s), total {order.Total:0.00} KZT.");
+
+            if (order.Total == 0)
+            {
+                ConfirmOrder(order, ev, ticketTypes);
+            }
+
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
-            return (ToOrderResponse(order, ev.Title), null, false);
+            return (ToOrderResponse(order, ev.Title, order.Status == OrderStatus.Confirmed), null, false);
         }
         catch (Exception exception) when (IsSerializationConflict(exception))
         {
             return (null, "Inventory changed during checkout. Please retry.", true);
         }
+    }
+
+    /// <summary>Simulated payment of a pending order. Tickets are created only when the outcome is "succeeded".</summary>
+    public async Task<(OrderResponse? Order, string? Error, ServiceError Kind)> PayOrderAsync(Guid orderId, Guid attendeeId, string? outcome)
+    {
+        var normalized = (outcome ?? "succeeded").Trim().ToLowerInvariant();
+        if (normalized is not ("succeeded" or "failed"))
+        {
+            return (null, "Outcome must be 'succeeded' or 'failed'.", ServiceError.BadRequest);
+        }
+
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var order = await LoadOrderAsync(orderId);
+            if (order is null || order.AttendeeId != attendeeId) return (null, "Order not found.", ServiceError.NotFound);
+            if (order.Status != OrderStatus.Pending) return (null, "Only pending orders can be paid.", ServiceError.BadRequest);
+
+            var now = DateTimeOffset.UtcNow;
+            if (order.CreatedAt + ReservationTime <= now)
+            {
+                // Give the tickets back right away and keep that change; the buyer has to start a new order.
+                var (expiredEvent, expiredTypes) = await LoadInventoryAsync(order.EventId);
+                if (expiredEvent is not null)
+                {
+                    ReleasePendingOrder(order, expiredEvent, expiredTypes, null, AuditActionType.OrderExpired,
+                        "Pending order expired after 15 minutes without payment.");
+                    await db.SaveChangesAsync();
+                    await transaction.CommitAsync();
+                }
+
+                return (null, "The reservation for this order has expired.", ServiceError.BadRequest);
+            }
+
+            var payment = new Payment
+            {
+                OrderId = order.Id,
+                Amount = order.Total,
+                IsSimulated = true,
+                CreatedAt = now
+            };
+            db.Payments.Add(payment);
+
+            Event ev;
+            if (normalized == "succeeded")
+            {
+                var inventory = await LoadInventoryAsync(order.EventId);
+                if (inventory.Event is null) return (null, "Order not found.", ServiceError.NotFound);
+                ev = inventory.Event;
+
+                payment.Status = PaymentStatus.Succeeded;
+                ConfirmOrder(order, ev, inventory.Types);
+                audit.Add(AuditActionType.PaymentSucceeded, nameof(Payment), payment.Id, ev.Id, attendeeId,
+                    $"Simulated payment of {payment.Amount:0.00} KZT succeeded.");
+            }
+            else
+            {
+                ev = await db.Events.SingleAsync(candidate => candidate.Id == order.EventId);
+                payment.Status = PaymentStatus.Failed;
+                audit.Add(AuditActionType.PaymentFailed, nameof(Payment), payment.Id, ev.Id, attendeeId,
+                    $"Simulated payment of {payment.Amount:0.00} KZT failed.");
+            }
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (ToOrderResponse(order, ev.Title, order.Status == OrderStatus.Confirmed), null, ServiceError.None);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Order changed while paying. Please retry.", ServiceError.Conflict);
+        }
+    }
+
+    /// <summary>Attendee cancels their own unpaid order and releases the reservation.</summary>
+    public async Task<(OrderResponse? Order, string? Error, ServiceError Kind)> CancelOwnOrderAsync(Guid orderId, Guid attendeeId)
+    {
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var order = await LoadOrderAsync(orderId);
+            if (order is null || order.AttendeeId != attendeeId) return (null, "Order not found.", ServiceError.NotFound);
+            if (order.Status != OrderStatus.Pending) return (null, "Only pending orders can be cancelled.", ServiceError.BadRequest);
+
+            var (ev, types) = await LoadInventoryAsync(order.EventId);
+            if (ev is null) return (null, "Order not found.", ServiceError.NotFound);
+
+            ReleasePendingOrder(order, ev, types, attendeeId, AuditActionType.OrderCancelled, "Pending order cancelled by the attendee.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (ToOrderResponse(order, ev.Title, false), null, ServiceError.None);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Order changed while cancelling. Please retry.", ServiceError.Conflict);
+        }
+    }
+
+    /// <summary>Organizer cancels a confirmed FREE order: its tickets are cancelled and the inventory is released.</summary>
+    public async Task<(OrderResponse? Order, string? Error, ServiceError Kind)> CancelFreeOrderAsync(
+        Guid eventId, Guid orderId, Guid actorId, bool isPlatformAdmin)
+    {
+        var canManage = await db.Events.AsNoTracking().AnyAsync(candidate =>
+            candidate.Id == eventId && (candidate.OrganizerId == actorId || isPlatformAdmin));
+        if (!canManage) return (null, "Event not found.", ServiceError.NotFound);
+
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var order = await LoadOrderAsync(orderId);
+            if (order is null || order.EventId != eventId) return (null, "Order not found.", ServiceError.NotFound);
+            if (order.Status != OrderStatus.Confirmed) return (null, "Only confirmed orders can be cancelled.", ServiceError.BadRequest);
+            if (order.Total > 0) return (null, "Only free orders can be cancelled.", ServiceError.BadRequest);
+
+            var tickets = order.Items.Where(item => item.Ticket is not null).Select(item => item.Ticket!).ToList();
+            if (tickets.Any(ticket => ticket.Status == TicketStatus.CheckedIn))
+            {
+                return (null, "The order has checked-in tickets.", ServiceError.BadRequest);
+            }
+
+            var (ev, types) = await LoadInventoryAsync(eventId);
+            if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
+
+            foreach (var ticket in tickets) ticket.Status = TicketStatus.Cancelled;
+            AdjustCounters(ev, types, order.Items, reservedSign: 0, soldSign: -1);
+            order.Status = OrderStatus.Cancelled;
+            audit.Add(AuditActionType.OrderCancelled, nameof(Order), order.Id, ev.Id, actorId, "Free order cancelled by the organizer.");
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (ToOrderResponse(order, ev.Title, false), null, ServiceError.None);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Order changed during this action. Please retry.", ServiceError.Conflict);
+        }
+    }
+
+    public async Task<IReadOnlyList<AttendeeResponse>?> GetAttendeesAsync(Guid eventId, Guid requesterId, bool isPlatformAdmin, string? search)
+    {
+        var canManage = await db.Events.AsNoTracking().AnyAsync(candidate =>
+            candidate.Id == eventId && (candidate.OrganizerId == requesterId || isPlatformAdmin));
+        if (!canManage) return null;
+
+        var query = db.Tickets.AsNoTracking().Where(ticket => ticket.EventId == eventId);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLower();
+            query = query.Where(ticket => ticket.AttendeeName.ToLower().Contains(term) || ticket.AttendeeEmail.ToLower().Contains(term));
+        }
+
+        var rows = await query
+            .OrderBy(ticket => ticket.AttendeeName)
+            .ThenBy(ticket => ticket.Code)
+            .Select(ticket => new
+            {
+                ticket.Id,
+                ticket.OrderItem.OrderId,
+                ticket.AttendeeName,
+                ticket.AttendeeEmail,
+                ticket.OrderItem.TicketTypeName,
+                ticket.Status
+            })
+            .ToListAsync();
+        return rows.Select(row => new AttendeeResponse(
+            row.Id, row.OrderId, row.AttendeeName, row.AttendeeEmail, row.TicketTypeName, row.Status.ToString())).ToList();
     }
 
     public async Task<IReadOnlyList<OrderResponse>> GetAttendeeOrdersAsync(Guid attendeeId)
@@ -234,7 +424,7 @@ public sealed class TicketingService(AuthDbContext db)
             .Where(order => order.AttendeeId == attendeeId)
             .OrderByDescending(order => order.CreatedAt)
             .ToListAsync();
-        return orders.Select(order => ToOrderResponse(order, order.Event.Title)).ToList();
+        return orders.Select(order => ToOrderResponse(order, order.Event.Title, false)).ToList();
     }
 
     public async Task<OrderResponse?> GetOrderAsync(Guid orderId, Guid requesterId, bool isPlatformAdmin)
@@ -245,7 +435,7 @@ public sealed class TicketingService(AuthDbContext db)
             return null;
         }
 
-        return ToOrderResponse(order, order.Event.Title);
+        return ToOrderResponse(order, order.Event.Title, true);
     }
 
     public async Task<IReadOnlyList<OrderResponse>?> GetEventOrdersAsync(Guid eventId, Guid organizerId, bool isPlatformAdmin)
@@ -256,7 +446,7 @@ public sealed class TicketingService(AuthDbContext db)
             .Where(order => order.EventId == eventId)
             .OrderByDescending(order => order.CreatedAt)
             .ToListAsync();
-        return orders.Select(order => ToOrderResponse(order, ev.Title)).ToList();
+        return orders.Select(order => ToOrderResponse(order, ev.Title, false)).ToList();
     }
 
     public async Task<byte[]?> GetTicketQrAsync(Guid ticketId, Guid requesterId, bool isPlatformAdmin)
@@ -267,6 +457,7 @@ public sealed class TicketingService(AuthDbContext db)
             .ThenInclude(order => order.Event)
             .SingleOrDefaultAsync(candidate => candidate.Id == ticketId);
         if (ticket is null) return null;
+        if (ticket.Status is TicketStatus.Cancelled or TicketStatus.Refunded) return null;
         var order = ticket.OrderItem.Order;
         if (order.AttendeeId != requesterId && order.Event.OrganizerId != requesterId && !isPlatformAdmin)
         {
@@ -278,9 +469,82 @@ public sealed class TicketingService(AuthDbContext db)
 
     private IQueryable<Order> LoadOrders() => db.Orders
         .Include(order => order.Event)
-        .Include(order => order.Payment)
+        .Include(order => order.Payments)
         .Include(order => order.Items)
-            .ThenInclude(item => item.Tickets);
+            .ThenInclude(item => item.Ticket);
+
+    /// <summary>Loads an order with its payments, items and tickets (without the event).</summary>
+    private Task<Order?> LoadOrderAsync(Guid orderId) => db.Orders
+        .Include(order => order.Payments)
+        .Include(order => order.Items)
+            .ThenInclude(item => item.Ticket)
+        .SingleOrDefaultAsync(order => order.Id == orderId);
+
+    /// <summary>Loads an event with all its ticket types. Callers run inside a Serializable transaction, which keeps concurrent updates consistent.</summary>
+    private async Task<(Event? Event, Dictionary<Guid, TicketType> Types)> LoadInventoryAsync(Guid eventId)
+    {
+        var ev = await db.Events.SingleOrDefaultAsync(candidate => candidate.Id == eventId);
+        if (ev is null) return (null, []);
+
+        var types = await db.TicketTypes.Where(ticketType => ticketType.EventId == eventId).ToListAsync();
+        return (ev, types.ToDictionary(ticketType => ticketType.Id));
+    }
+
+    /// <summary>Cancels this event's unpaid orders whose reservation time ran out, so their tickets become available again.</summary>
+    private async Task ReleaseExpiredOrdersAsync(Event ev, Dictionary<Guid, TicketType> types)
+    {
+        var cutoff = DateTimeOffset.UtcNow - ReservationTime;
+        var expiredOrders = await db.Orders
+            .Include(order => order.Items)
+            .Where(order => order.EventId == ev.Id && order.Status == OrderStatus.Pending && order.CreatedAt <= cutoff)
+            .ToListAsync();
+        foreach (var order in expiredOrders)
+        {
+            ReleasePendingOrder(order, ev, types, null, AuditActionType.OrderExpired, "Pending order expired after 15 minutes without payment.");
+        }
+    }
+
+    /// <summary>Applies per-ticket counter changes to the ticket types and the event.</summary>
+    private static void AdjustCounters(
+        Event ev, Dictionary<Guid, TicketType> types, IEnumerable<OrderItem> items, int reservedSign, int soldSign)
+    {
+        foreach (var group in items.GroupBy(item => item.TicketTypeId))
+        {
+            var count = group.Count();
+            types[group.Key].ReservedQuantity += reservedSign * count;
+            types[group.Key].SoldQuantity += soldSign * count;
+            ev.TicketsReserved += reservedSign * count;
+            ev.TicketsIssued += soldSign * count;
+        }
+
+        ev.UpdatedAt = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>Marks the order confirmed, creates one ticket per item and moves reserved counters to sold/issued.</summary>
+    private static void ConfirmOrder(Order order, Event ev, Dictionary<Guid, TicketType> types)
+    {
+        order.Status = OrderStatus.Confirmed;
+        foreach (var item in order.Items)
+        {
+            item.Ticket = new Ticket
+            {
+                EventId = ev.Id,
+                Code = CreateTicketCode(),
+                AttendeeName = order.AttendeeName,
+                AttendeeEmail = order.AttendeeEmail
+            };
+        }
+
+        AdjustCounters(ev, types, order.Items, reservedSign: -1, soldSign: 1);
+    }
+
+    private void ReleasePendingOrder(
+        Order order, Event ev, Dictionary<Guid, TicketType> types, Guid? actorId, AuditActionType action, string description)
+    {
+        order.Status = OrderStatus.Cancelled;
+        AdjustCounters(ev, types, order.Items, reservedSign: -1, soldSign: 0);
+        audit.Add(action, nameof(Order), order.Id, ev.Id, actorId, description);
+    }
 
     private async Task<Event?> GetManagedEventAsync(Guid eventId, Guid requesterId, bool isPlatformAdmin)
     {
@@ -288,7 +552,20 @@ public sealed class TicketingService(AuthDbContext db)
         return ev is not null && (ev.OrganizerId == requesterId || isPlatformAdmin) ? ev : null;
     }
 
-    private static TicketTypeResponse ToTicketTypeResponse(TicketType ticketType) => new(
+    /// <summary>Refunded and checked-in ticket counts per ticket type, from one grouped query.</summary>
+    private async Task<Dictionary<(Guid TicketTypeId, TicketStatus Status), int>> GetStatusCountsAsync(Guid eventId)
+    {
+        var rows = await db.Tickets
+            .Where(ticket => ticket.EventId == eventId &&
+                (ticket.Status == TicketStatus.Refunded || ticket.Status == TicketStatus.CheckedIn))
+            .GroupBy(ticket => new { ticket.OrderItem.TicketTypeId, ticket.Status })
+            .Select(group => new { group.Key.TicketTypeId, group.Key.Status, Count = group.Count() })
+            .ToListAsync();
+        return rows.ToDictionary(row => (row.TicketTypeId, row.Status), row => row.Count);
+    }
+
+    private static TicketTypeResponse ToTicketTypeResponse(
+        TicketType ticketType, Dictionary<(Guid TicketTypeId, TicketStatus Status), int>? counts) => new(
         ticketType.Id,
         ticketType.EventId,
         ticketType.Name,
@@ -296,35 +573,52 @@ public sealed class TicketingService(AuthDbContext db)
         ticketType.Price,
         ticketType.Quantity,
         ticketType.SoldQuantity,
-        ticketType.Quantity - ticketType.SoldQuantity,
+        ticketType.Quantity - ticketType.SoldQuantity - ticketType.ReservedQuantity,
         ticketType.SalesStartAt,
         ticketType.SalesEndAt,
         ticketType.MaxPerOrder,
-        ticketType.IsHidden);
+        ticketType.IsHidden,
+        ticketType.ReservedQuantity,
+        counts is not null && counts.TryGetValue((ticketType.Id, TicketStatus.Refunded), out var refunded) ? refunded : 0,
+        counts is not null && counts.TryGetValue((ticketType.Id, TicketStatus.CheckedIn), out var checkedIn) ? checkedIn : 0);
 
-    private static OrderResponse ToOrderResponse(Order order, string eventTitle) => new(
-        order.Id,
-        order.EventId,
-        eventTitle,
-        order.Status.ToString(),
-        order.Payment is null ? "Free" : "Simulation",
-        order.Total,
-        order.CreatedAt,
-        order.Items.Select(item => new OrderItemResponse(
-            item.TicketTypeId,
-            item.TicketTypeName,
-            item.Quantity,
-            item.UnitPrice,
-            item.Tickets.Select(ticket => new TicketResponse(
-                ticket.Id,
-                ticket.Code,
-                ticket.Status.ToString(),
-                ticket.AttendeeName,
-                ticket.AttendeeEmail,
-                item.TicketTypeName,
-                $"data:image/png;base64,{Convert.ToBase64String(GenerateQr(ticket.Code))}"))
-                .ToList()))
-            .ToList());
+    private static OrderResponse ToOrderResponse(Order order, string eventTitle, bool includeQr)
+    {
+        var latestPayment = order.Payments.OrderByDescending(payment => payment.CreatedAt).FirstOrDefault();
+        return new OrderResponse(
+            order.Id,
+            order.EventId,
+            eventTitle,
+            order.Status.ToString(),
+            order.Total == 0 ? "Free" : "Simulation",
+            order.Total,
+            order.CreatedAt,
+            order.Items
+                .GroupBy(item => item.TicketTypeId)
+                .Select(group => new OrderItemResponse(
+                    group.Key,
+                    group.First().TicketTypeName,
+                    group.Count(),
+                    group.First().UnitPrice,
+                    group
+                        .Where(item => item.Ticket is not null)
+                        .Select(item => new TicketResponse(
+                            item.Ticket!.Id,
+                            item.Ticket.Code,
+                            item.Ticket.Status.ToString(),
+                            item.Ticket.AttendeeName,
+                            item.Ticket.AttendeeEmail,
+                            item.TicketTypeName,
+                            includeQr && item.Ticket.Status is TicketStatus.Valid or TicketStatus.CheckedIn
+                                ? $"data:image/png;base64,{Convert.ToBase64String(GenerateQr(item.Ticket.Code))}"
+                                : null))
+                        .ToList()))
+                .ToList(),
+            order.DiscountTotal,
+            order.FeeTotal,
+            order.Status == OrderStatus.Pending ? order.CreatedAt + ReservationTime : null,
+            latestPayment?.Status.ToString());
+    }
 
     private static byte[] GenerateQr(string code)
     {

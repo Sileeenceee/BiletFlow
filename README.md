@@ -49,6 +49,8 @@ For an existing database, also apply `backend/BiletFlow.Api/Data/Migrations/002_
 
 Refresh tokens are stored in the existing `AuthTokens` table, so no schema migration is needed for them.
 
+**Important:** the orders/tickets/payments schema was reshaped (no migration is provided). After pulling this change, drop the database (`docker compose down -v`) so it is recreated from the EF Core model. Migrations `001` and `002` are for legacy databases only.
+
 ## Authentication API
 
 - `POST /api/auth/login` returns a short-lived `accessToken` (60 minutes) and a `refreshToken` (7 days). Send the access token as `Authorization: Bearer <token>`.
@@ -59,5 +61,6 @@ Refresh tokens are stored in the existing `AuthTokens` table, so no schema migra
 ## Ticketing API
 
 - Organizers manage ticket types at `/api/events/{eventId}/ticket-types` and enable paid ticket sales for demonstration through `/api/events/{eventId}/paid-sales/activate-simulation`. The latter is explicitly a simulation and does not verify identity, collect an activation fee, or configure real payouts.
-- Authenticated attendees submit `POST /api/orders/checkout` with an event, attendee details, and ticket type quantities. Free orders complete without a payment record; paid orders create a clearly labelled simulated payment. Inventory is checked and updated in a serializable transaction.
+- Authenticated attendees submit `POST /api/orders/checkout` with an event, attendee details, and ticket type quantities. Inventory (ticket type and optional event `capacity`) is checked and reserved in a serializable transaction. Free orders are confirmed immediately with tickets and no payment record. Paid orders are returned as `Pending` with no tickets and a 15-minute reservation (`expiresAt`); the attendee then calls `POST /api/orders/{orderId}/pay` with `{ "outcome": "succeeded" | "failed" }` (a clearly labelled payment simulation). Success confirms the order and creates the tickets; a failed attempt can be retried until the reservation expires. `POST /api/orders/{orderId}/cancel` cancels the attendee's own pending order. An unpaid order that is older than 15 minutes is released the next time anyone checks out or pays for the same event.
+- Organizers can cancel free orders (`POST /api/events/{eventId}/orders/{orderId}/cancel`) and list ticket holders with `GET /api/events/{eventId}/attendees?search=`. A platform admin can suspend paid sales with `POST /api/admin/events/{eventId}/paid-sales/suspend`. Order, payment, cancellation and paid-sales actions are written to the audit log.
 - Attendees can list their orders at `/api/orders/me`; order and ticket QR access is limited to the attendee, the event organizer, or a platform administrator. Checkout responses include each ticket's opaque QR payload and PNG data URI.

@@ -26,6 +26,7 @@ public class Program
         builder.Services.AddScoped<AuthService>();
         builder.Services.AddScoped<OrganizerProfileService>();
         builder.Services.AddScoped<EventService>();
+        builder.Services.AddScoped<AuditService>();
         builder.Services.AddScoped<TicketingService>();
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
