@@ -67,4 +67,4 @@ Refresh tokens are stored in the existing `AuthTokens` table, so no schema migra
 
 ## BiletFlow Figma Design
 
-https://www.figma.com/design/Uw6KZTD3dWojTLt0fClabK/BiletFlow?node-id=1-231&t=pUI9oK7fLgUo1T43-1 
+https://www.figma.com/design/Uw6KZTD3dWojTLt0fClabK/BiletFlow?node-id=1-231&t=iRrgbjgOvO3ugT7s-1
