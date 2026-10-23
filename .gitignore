@@ -3,6 +3,9 @@ bin/
 obj/
 TestResults/
 artifacts/
+*.trx
+*.coverage
+*.coveragexml
 *.user
 *.suo
 *.cache

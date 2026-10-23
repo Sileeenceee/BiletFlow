@@ -43,13 +43,32 @@ During local development, Vite proxies `/api` requests to `https://localhost:696
 
 To build and run the frontend, API, and database in Docker, run `docker compose up --build` from the repository root. Open the frontend at `http://localhost:8080`; its `/api` requests are proxied to the API container.
 
-For an existing database created with the earlier event schema, apply `backend/BiletFlow.Api/Data/Migrations/001_align_legacy_schema.sql` once before starting the API. It migrates existing event values into the current model, preserves event rows, and removes legacy-only columns.
+## Database migrations
 
-For an existing database, also apply `backend/BiletFlow.Api/Data/Migrations/002_ticketing.sql` after migration `001` to add ticket types, inventory, orders, simulated payments, and issued tickets. A fresh database is created from the current EF Core model automatically.
+Database schema changes are managed with EF Core migrations in `backend/BiletFlow.Api/Data/EfMigrations`. The API applies pending migrations at startup with `Database.MigrateAsync()`. A fresh Compose database is therefore initialized automatically when the API starts.
 
-Refresh tokens are stored in the existing `AuthTokens` table, so no schema migration is needed for them.
+Create and apply migrations from the repository root with:
 
-**Important:** the orders/tickets/payments schema was reshaped (no migration is provided). After pulling this change, drop the database (`docker compose down -v`) so it is recreated from the EF Core model. Migrations `001` and `002` are for legacy databases only.
+```sh
+dotnet ef migrations add <MigrationName> \
+  --project backend/BiletFlow.Api \
+  --startup-project backend/BiletFlow.Api
+dotnet ef database update \
+  --project backend/BiletFlow.Api \
+  --startup-project backend/BiletFlow.Api
+```
+
+`InitialSchema` is the baseline migration for a fresh database. Existing databases created before EF migrations were introduced need a reviewed, data-preserving upgrade migration before applying this baseline; do not drop the Compose volume to apply schema changes.
+
+## Backend regression tests
+
+Run the backend test project with:
+
+```sh
+dotnet test backend/BiletFlow.Api.Tests/BiletFlow.Api.Tests.csproj
+```
+
+The locale-independent validation test runs without external services. The API integration regression is skipped unless `BILETFLOW_TEST_API_BASE_URL` points to a test API connected to a disposable PostgreSQL database; it creates test accounts, events, and orders in that database. Do not point it at a database containing data you need to keep.
 
 ## Authentication API
 

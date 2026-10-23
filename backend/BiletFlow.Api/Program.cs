@@ -27,7 +27,11 @@ public class Program
         builder.Services.AddScoped<OrganizerProfileService>();
         builder.Services.AddScoped<EventService>();
         builder.Services.AddScoped<AuditService>();
+        builder.Services.AddScoped<PromoCampaignService>();
         builder.Services.AddScoped<TicketingService>();
+        builder.Services.AddScoped<TicketDocumentService>();
+        builder.Services.AddScoped<TicketVerificationService>();
+        builder.Services.AddScoped<SupportService>();
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
