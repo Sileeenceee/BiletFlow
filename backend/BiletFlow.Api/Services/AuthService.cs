@@ -117,6 +117,95 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
 
     public Task<AppUser?> GetUserAsync(Guid userId) => db.Users.SingleOrDefaultAsync(user => user.Id == userId);
 
+    public async Task<(AppUser? User, string? VerificationToken, string? Error)> UpdateAccountAsync(
+        Guid userId, UpdateAccountRequest request)
+    {
+        var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Id == userId);
+        if (user is null || user.IsSuspended) return (null, null, "User not found.");
+        if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword) ==
+            PasswordVerificationResult.Failed)
+        {
+            return (null, null, "Current password is incorrect.");
+        }
+
+        var emailChanged = request.Email is not null;
+        if (emailChanged)
+        {
+            var email = NormalizeEmail(request.Email!);
+            if (!IsValidEmail(email)) return (null, null, "A valid email address is required.");
+            if (!string.Equals(email, user.Email, StringComparison.OrdinalIgnoreCase) &&
+                await db.Users.AnyAsync(candidate => candidate.Email == email && candidate.Id != userId))
+            {
+                return (null, null, "An account with this email already exists.");
+            }
+
+            emailChanged = !string.Equals(email, user.Email, StringComparison.OrdinalIgnoreCase);
+            if (emailChanged)
+            {
+                user.Email = email;
+                user.EmailConfirmed = false;
+            }
+        }
+
+        var passwordChanged = request.NewPassword is not null;
+        if (passwordChanged)
+        {
+            if (!IsValidPassword(request.NewPassword!))
+            {
+                return (null, null, "New password must be at least 8 characters.");
+            }
+
+            user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword!);
+        }
+
+        if (!emailChanged && !passwordChanged)
+        {
+            return (null, null, "Provide a different email address or a new password.");
+        }
+
+        string? verificationToken = null;
+        if (emailChanged)
+        {
+            await db.AuthTokens
+                .Where(token => token.UserId == userId && token.Type == AuthTokenType.EmailVerification && token.UsedAt == null)
+                .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
+            verificationToken = CreateRawToken();
+            db.AuthTokens.Add(CreateToken(userId, AuthTokenType.EmailVerification, verificationToken, TimeSpan.FromHours(24)));
+        }
+
+        if (emailChanged || passwordChanged) await RevokeRefreshTokensAsync(userId);
+        await db.SaveChangesAsync();
+        return (user, verificationToken, null);
+    }
+
+    public async Task<(bool Deleted, string? Error)> DeleteAccountAsync(Guid userId)
+    {
+        var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Id == userId);
+        if (user is null) return (false, "User not found.");
+        if (user.Role == UserRole.PlatformAdmin)
+        {
+            return (false, "Platform administrator accounts cannot be self-deleted.");
+        }
+
+        if (await db.Orders.AnyAsync(order => order.AttendeeId == userId) ||
+            await db.Events.AnyAsync(ev => ev.OrganizerId == userId) ||
+            await db.SupportCases.AnyAsync(supportCase =>
+                supportCase.RequesterUserId == userId || supportCase.AssignedToUserId == userId) ||
+            await db.SupportMessages.AnyAsync(message => message.SenderUserId == userId) ||
+            await db.PromoCampaigns.AnyAsync(campaign => campaign.CreatedByUserId == userId) ||
+            await db.EventAdminAssignments.AnyAsync(assignment =>
+                assignment.UserId == userId || assignment.AssignedByUserId == userId) ||
+            await db.TicketCheckIns.AnyAsync(checkIn =>
+                checkIn.CheckedInByUserId == userId || checkIn.ReversedByUserId == userId))
+        {
+            return (false, "Account has retained event, order, check-in, or support history. Contact support to preserve required records.");
+        }
+
+        db.Users.Remove(user);
+        await db.SaveChangesAsync();
+        return (true, null);
+    }
+
     public bool IsDevelopment => environment.IsDevelopment();
 
     private async Task<AuthResponse> CreateAuthResponseAsync(AppUser user)

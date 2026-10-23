@@ -20,6 +20,15 @@ public sealed class TicketTypesController(TicketingService ticketingService) : C
         return ticketTypes is null ? NotFound() : Ok(ticketTypes);
     }
 
+    [AllowAnonymous]
+    [HttpGet("ticket-types/{ticketTypeId:guid}")]
+    public async Task<IActionResult> GetById(Guid eventId, Guid ticketTypeId)
+    {
+        var ticketType = await ticketingService.GetTicketTypeAsync(
+            eventId, ticketTypeId, GetCurrentUserId(), IsPlatformAdmin());
+        return ticketType is null ? NotFound() : Ok(ticketType);
+    }
+
     [HttpPost("ticket-types")]
     public async Task<IActionResult> Create(Guid eventId, [FromBody] CreateTicketTypeRequest request)
     {
@@ -32,7 +41,7 @@ public sealed class TicketTypesController(TicketingService ticketingService) : C
             return result.Error == "Event not found." ? NotFound(new { error = result.Error }) : BadRequest(new { error = result.Error });
         }
 
-        return CreatedAtAction(nameof(Get), new { eventId }, result.TicketType);
+        return CreatedAtAction(nameof(GetById), new { eventId, ticketTypeId = result.TicketType.Id }, result.TicketType);
     }
 
     [HttpPut("ticket-types/{ticketTypeId:guid}")]
@@ -55,6 +64,23 @@ public sealed class TicketTypesController(TicketingService ticketingService) : C
         }
 
         return Ok(result.TicketType);
+    }
+
+    [HttpDelete("ticket-types/{ticketTypeId:guid}")]
+    public async Task<IActionResult> Delete(Guid eventId, Guid ticketTypeId)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.DeleteTicketTypeAsync(
+            userId.Value, IsPlatformAdmin(), eventId, ticketTypeId);
+        if (result.Deleted) return NoContent();
+        if (result.Error is "Event not found." or "Ticket type not found.")
+        {
+            return NotFound(new { error = result.Error });
+        }
+
+        return Conflict(new { error = result.Error });
     }
 
     [HttpPost("paid-sales/activate-simulation")]

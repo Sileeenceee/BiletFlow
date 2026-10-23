@@ -89,4 +89,43 @@ public sealed class AuthController(AuthService service) : ControllerBase
             user.EmailConfirmed
         });
     }
+
+    [Authorize]
+    [HttpPut("me")]
+    public async Task<IActionResult> UpdateMe([FromBody] UpdateAccountRequest request)
+    {
+        var userIdText = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(userIdText, out var userId)) return Unauthorized();
+
+        var result = await service.UpdateAccountAsync(userId, request);
+        if (result.User is null)
+        {
+            return result.Error == "User not found."
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+        }
+
+        return Ok(new
+        {
+            UserId = result.User.Id,
+            result.User.Email,
+            Role = result.User.Role.ToString(),
+            result.User.EmailConfirmed,
+            VerificationToken = service.IsDevelopment ? result.VerificationToken : null
+        });
+    }
+
+    [Authorize]
+    [HttpDelete("me")]
+    public async Task<IActionResult> DeleteMe()
+    {
+        var userIdText = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(userIdText, out var userId)) return Unauthorized();
+
+        var result = await service.DeleteAccountAsync(userId);
+        if (result.Deleted) return NoContent();
+        return result.Error == "User not found."
+            ? NotFound(new { error = result.Error })
+            : Conflict(new { error = result.Error });
+    }
 }

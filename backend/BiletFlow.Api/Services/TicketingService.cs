@@ -8,7 +8,7 @@ using QRCoder;
 
 namespace BiletFlow.Api.Services;
 
-public sealed class TicketingService(AuthDbContext db, AuditService audit)
+public sealed class TicketingService(AuthDbContext db, AuditService audit, PromoCampaignService promoCampaigns)
 {
     /// <summary>How long inventory stays reserved for an unpaid order.</summary>
     public static readonly TimeSpan ReservationTime = TimeSpan.FromMinutes(15);
@@ -19,7 +19,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         if (ev is null) return null;
 
         var canManage = isPlatformAdmin || requesterId == ev.OrganizerId;
-        if (!ev.IsPublished && !canManage) return null;
+        if ((!ev.IsPublished || ev.IsCancelled || ev.Visibility == EventVisibility.Private) && !canManage) return null;
 
         var ticketTypes = await db.TicketTypes
             .Where(ticketType => ticketType.EventId == eventId && (canManage || !ticketType.IsHidden))
@@ -30,6 +30,22 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         return ticketTypes.Select(ticketType => ToTicketTypeResponse(ticketType, counts)).ToList();
     }
 
+    public async Task<TicketTypeResponse?> GetTicketTypeAsync(
+        Guid eventId, Guid ticketTypeId, Guid? requesterId, bool isPlatformAdmin)
+    {
+        var ev = await db.Events.SingleOrDefaultAsync(candidate => candidate.Id == eventId);
+        if (ev is null || ev.IsCancelled) return null;
+
+        var canManage = isPlatformAdmin || requesterId == ev.OrganizerId;
+        if ((!ev.IsPublished || ev.Visibility == EventVisibility.Private) && !canManage) return null;
+
+        var ticketType = await db.TicketTypes.SingleOrDefaultAsync(candidate =>
+            candidate.Id == ticketTypeId && candidate.EventId == eventId && (canManage || !candidate.IsHidden));
+        return ticketType is null
+            ? null
+            : ToTicketTypeResponse(ticketType, await GetStatusCountsAsync(eventId));
+    }
+
     public async Task<(TicketTypeResponse? TicketType, string? Error)> CreateTicketTypeAsync(
         Guid organizerId,
         bool isPlatformAdmin,
@@ -38,6 +54,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
     {
         var ev = await GetManagedEventAsync(eventId, organizerId, isPlatformAdmin);
         if (ev is null) return (null, "Event not found.");
+        if (ev.IsCancelled) return (null, "Ticket types cannot be changed after an event is cancelled.");
         if (!IsValidSalesWindow(request.SalesStartAt, request.SalesEndAt)) return (null, "Sales end must be after sales start.");
         if (string.IsNullOrWhiteSpace(request.Name)) return (null, "Ticket type name is required.");
 
@@ -67,6 +84,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
     {
         var ev = await GetManagedEventAsync(eventId, organizerId, isPlatformAdmin);
         if (ev is null) return (null, "Event not found.");
+        if (ev.IsCancelled) return (null, "Ticket types cannot be changed after an event is cancelled.");
 
         try
         {
@@ -100,6 +118,39 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         }
     }
 
+    public async Task<(bool Deleted, string? Error)> DeleteTicketTypeAsync(
+        Guid organizerId, bool isPlatformAdmin, Guid eventId, Guid ticketTypeId)
+    {
+        var ev = await GetManagedEventAsync(eventId, organizerId, isPlatformAdmin);
+        if (ev is null) return (false, "Event not found.");
+
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var ticketType = await db.TicketTypes.SingleOrDefaultAsync(candidate =>
+                candidate.Id == ticketTypeId && candidate.EventId == eventId);
+            if (ticketType is null) return (false, "Ticket type not found.");
+            if (ticketType.SoldQuantity > 0 || ticketType.ReservedQuantity > 0 ||
+                await db.OrderItems.AnyAsync(item => item.TicketTypeId == ticketTypeId))
+            {
+                return (false, "A ticket type with order, sale, or reservation history cannot be deleted. Hide it instead.");
+            }
+            if (await db.PromoCampaignTicketTypes.AnyAsync(row => row.TicketTypeId == ticketTypeId))
+            {
+                return (false, "Remove this ticket type from its promo campaigns before deleting it.");
+            }
+
+            db.TicketTypes.Remove(ticketType);
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (true, null);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (false, "Inventory changed while deleting this ticket type. Please retry.");
+        }
+    }
+
     public async Task<bool> ActivatePaidSalesSimulationAsync(
         Guid organizerId,
         bool isPlatformAdmin,
@@ -108,7 +159,8 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
     {
         if (!confirmSimulationOnly) return false;
         var ev = await GetManagedEventAsync(eventId, organizerId, isPlatformAdmin);
-        if (ev is null || !await db.TicketTypes.AnyAsync(ticketType => ticketType.EventId == eventId && ticketType.Price > 0))
+        if (ev is null || ev.IsCancelled ||
+            !await db.TicketTypes.AnyAsync(ticketType => ticketType.EventId == eventId && ticketType.Price > 0))
         {
             return false;
         }
@@ -158,10 +210,18 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         {
             await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
             var (ev, ticketTypes) = await LoadInventoryAsync(request.EventId);
-            if (ev is null || !ev.IsPublished) return (null, "Published event not found.", false);
+            if (ev is null || !ev.IsPublished || ev.IsCancelled || ev.Visibility == EventVisibility.Private)
+            {
+                return (null, "Published event not found.", false);
+            }
 
             var now = DateTimeOffset.UtcNow;
             if (ev.EndDateUtc <= now) return (null, "This event has already ended.", false);
+            if ((ev.RegistrationOpensAt is not null && ev.RegistrationOpensAt > now) ||
+                (ev.RegistrationClosesAt is not null && ev.RegistrationClosesAt <= now))
+            {
+                return (null, "Registration is not currently open for this event.", false);
+            }
 
             // Unpaid orders whose reservation ran out give their tickets back before we count what is left.
             await ReleaseExpiredOrdersAsync(ev, ticketTypes);
@@ -195,6 +255,20 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
                 {
                     return (null, "Paid sales have not been activated for this event.", false);
                 }
+            }
+
+            var campaignRequested = !string.IsNullOrWhiteSpace(request.PromoCode) ||
+                !string.IsNullOrWhiteSpace(request.CampaignToken);
+            var campaign = await promoCampaigns.FindApplicableCampaignAsync(
+                ev.Id,
+                request.PromoCode,
+                request.CampaignToken,
+                request.Items.Select(item => item.TicketTypeId).ToArray(),
+                null,
+                now);
+            if (campaignRequested && campaign is null)
+            {
+                return (null, "Promo code is invalid, expired, disabled, exhausted, or inapplicable to these tickets.", false);
             }
 
             var totalQuantity = request.Items.Sum(selection => selection.Quantity);
@@ -233,6 +307,14 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
                 }
             }
 
+            if (campaign is not null)
+            {
+                order.PromoCampaignId = campaign.Id;
+                order.PromoCode = campaign.Code;
+                order.DiscountTotal = await promoCampaigns.ApplyDiscountAsync(campaign, order.Items) ?? 0m;
+                order.Total -= order.DiscountTotal;
+            }
+
             AdjustCounters(ev, ticketTypes, order.Items, reservedSign: 1, soldSign: 0);
             db.Orders.Add(order);
             audit.Add(AuditActionType.OrderCreated, nameof(Order), order.Id, ev.Id, attendeeId,
@@ -250,6 +332,164 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         catch (Exception exception) when (IsSerializationConflict(exception))
         {
             return (null, "Inventory changed during checkout. Please retry.", true);
+        }
+    }
+
+    public async Task<(OrderResponse? Order, string? Error, ServiceError Kind)> UpdatePendingOrderAsync(
+        Guid orderId, Guid attendeeId, UpdateOrderRequest request)
+    {
+        if (request.Items.Count is < 1 or > 10 ||
+            request.Items.Any(item => item.TicketTypeId == Guid.Empty || item.Quantity is < 1 or > 100) ||
+            request.Items.Select(item => item.TicketTypeId).Distinct().Count() != request.Items.Count)
+        {
+            return (null, "Select between 1 and 10 valid ticket types, each only once.", ServiceError.BadRequest);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.AttendeeName) || string.IsNullOrWhiteSpace(request.AttendeeEmail))
+        {
+            return (null, "Attendee name and email are required.", ServiceError.BadRequest);
+        }
+
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var order = await LoadOrderAsync(orderId);
+            if (order is null || order.AttendeeId != attendeeId)
+            {
+                return (null, "Order not found.", ServiceError.NotFound);
+            }
+
+            if (order.Status != OrderStatus.Pending)
+            {
+                return (null, "Only pending orders can be updated.", ServiceError.BadRequest);
+            }
+
+            var (ev, ticketTypes) = await LoadInventoryAsync(order.EventId);
+            if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
+            if (!ev.IsPublished || ev.IsCancelled || ev.Visibility == EventVisibility.Private)
+            {
+                return (null, "This event is not available for checkout.", ServiceError.BadRequest);
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (order.CreatedAt + ReservationTime <= now)
+            {
+                ReleasePendingOrder(order, ev, ticketTypes, null, AuditActionType.OrderExpired,
+                    "Pending order expired after 15 minutes without payment.");
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+                return (null, "The reservation for this order has expired.", ServiceError.BadRequest);
+            }
+
+            if (ev.EndDateUtc <= now ||
+                (ev.RegistrationOpensAt is not null && ev.RegistrationOpensAt > now) ||
+                (ev.RegistrationClosesAt is not null && ev.RegistrationClosesAt <= now))
+            {
+                return (null, "Registration is not currently open for this event.", ServiceError.BadRequest);
+            }
+
+            AdjustCounters(ev, ticketTypes, order.Items, reservedSign: -1, soldSign: 0);
+            if (request.Items.Any(item => !ticketTypes.ContainsKey(item.TicketTypeId)))
+            {
+                return (null, "One or more ticket types are unavailable.", ServiceError.BadRequest);
+            }
+
+            foreach (var selection in request.Items)
+            {
+                var ticketType = ticketTypes[selection.TicketTypeId];
+                if (ticketType.IsHidden ||
+                    (ticketType.SalesStartAt is not null && ticketType.SalesStartAt > now) ||
+                    (ticketType.SalesEndAt is not null && ticketType.SalesEndAt <= now))
+                {
+                    return (null, $"Ticket type '{ticketType.Name}' is not currently on sale.", ServiceError.BadRequest);
+                }
+
+                if (selection.Quantity > ticketType.MaxPerOrder)
+                {
+                    return (null, $"Ticket type '{ticketType.Name}' exceeds its per-order limit.", ServiceError.BadRequest);
+                }
+
+                if (selection.Quantity > ticketType.Quantity - ticketType.SoldQuantity - ticketType.ReservedQuantity)
+                {
+                    return (null, $"Ticket type '{ticketType.Name}' has insufficient inventory.", ServiceError.Conflict);
+                }
+
+                if (ticketType.Price > 0 && ev.PaidSalesStatus != PaidSalesStatus.Active)
+                {
+                    return (null, "Paid sales have not been activated for this event.", ServiceError.BadRequest);
+                }
+            }
+
+            var totalQuantity = request.Items.Sum(item => item.Quantity);
+            if (ev.Capacity is not null && totalQuantity > ev.Capacity.Value - ev.TicketsIssued - ev.TicketsReserved)
+            {
+                return (null, "The event does not have enough remaining capacity.", ServiceError.Conflict);
+            }
+
+            db.OrderItems.RemoveRange(order.Items);
+            order.Items.Clear();
+            foreach (var selection in request.Items)
+            {
+                var ticketType = ticketTypes[selection.TicketTypeId];
+                for (var index = 0; index < selection.Quantity; index++)
+                {
+                    var item = new OrderItem
+                    {
+                        Order = order,
+                        TicketTypeId = ticketType.Id,
+                        TicketTypeName = ticketType.Name,
+                        UnitPrice = ticketType.Price
+                    };
+                    order.Items.Add(item);
+                    db.OrderItems.Add(item);
+                }
+            }
+
+            order.AttendeeName = request.AttendeeName.Trim();
+            order.AttendeeEmail = request.AttendeeEmail.Trim().ToLowerInvariant();
+            order.Total = request.Items.Sum(item => ticketTypes[item.TicketTypeId].Price * item.Quantity);
+            order.DiscountTotal = 0m;
+            order.PromoCampaignId = null;
+            order.PromoCode = null;
+            if (order.Total > 9_999_999_999.99m)
+            {
+                return (null, "Order total exceeds the supported KZT amount.", ServiceError.BadRequest);
+            }
+
+            var campaignRequested = !string.IsNullOrWhiteSpace(request.PromoCode) ||
+                !string.IsNullOrWhiteSpace(request.CampaignToken);
+            var campaign = await promoCampaigns.FindApplicableCampaignAsync(
+                ev.Id,
+                request.PromoCode,
+                request.CampaignToken,
+                request.Items.Select(item => item.TicketTypeId).ToArray(),
+                order.Id,
+                now);
+            if (campaignRequested && campaign is null)
+            {
+                return (null, "Promo code is invalid, expired, disabled, exhausted, or inapplicable to these tickets.", ServiceError.BadRequest);
+            }
+
+            if (campaign is not null)
+            {
+                order.PromoCampaignId = campaign.Id;
+                order.PromoCode = campaign.Code;
+                order.DiscountTotal = await promoCampaigns.ApplyDiscountAsync(campaign, order.Items) ?? 0m;
+                order.Total -= order.DiscountTotal;
+            }
+
+            AdjustCounters(ev, ticketTypes, order.Items, reservedSign: 1, soldSign: 0);
+            audit.Add(AuditActionType.OrderUpdated, nameof(Order), order.Id, ev.Id, attendeeId,
+                $"Pending order updated: {totalQuantity} ticket(s), total {order.Total:0.00} KZT.");
+            if (order.Total == 0) ConfirmOrder(order, ev, ticketTypes);
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (ToOrderResponse(order, ev.Title, order.Status == OrderStatus.Confirmed), null, ServiceError.None);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Inventory changed while updating this order. Please retry.", ServiceError.Conflict);
         }
     }
 
@@ -285,6 +525,17 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
                 return (null, "The reservation for this order has expired.", ServiceError.BadRequest);
             }
 
+            var (eventForPayment, inventoryForPayment) = await LoadInventoryAsync(order.EventId);
+            if (eventForPayment is null) return (null, "Order not found.", ServiceError.NotFound);
+            if (eventForPayment.IsCancelled)
+            {
+                ReleasePendingOrder(order, eventForPayment, inventoryForPayment, null, AuditActionType.OrderCancelled,
+                    "Pending order cancelled because its event was cancelled.");
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+                return (null, "The event has been cancelled.", ServiceError.BadRequest);
+            }
+
             var payment = new Payment
             {
                 OrderId = order.Id,
@@ -294,21 +545,16 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
             };
             db.Payments.Add(payment);
 
-            Event ev;
+            var ev = eventForPayment;
             if (normalized == "succeeded")
             {
-                var inventory = await LoadInventoryAsync(order.EventId);
-                if (inventory.Event is null) return (null, "Order not found.", ServiceError.NotFound);
-                ev = inventory.Event;
-
                 payment.Status = PaymentStatus.Succeeded;
-                ConfirmOrder(order, ev, inventory.Types);
+                ConfirmOrder(order, ev, inventoryForPayment);
                 audit.Add(AuditActionType.PaymentSucceeded, nameof(Payment), payment.Id, ev.Id, attendeeId,
                     $"Simulated payment of {payment.Amount:0.00} KZT succeeded.");
             }
             else
             {
-                ev = await db.Events.SingleAsync(candidate => candidate.Id == order.EventId);
                 payment.Status = PaymentStatus.Failed;
                 audit.Add(AuditActionType.PaymentFailed, nameof(Payment), payment.Id, ev.Id, attendeeId,
                     $"Simulated payment of {payment.Amount:0.00} KZT failed.");
@@ -435,7 +681,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
             return null;
         }
 
-        return ToOrderResponse(order, order.Event.Title, true);
+        return ToOrderResponse(order, order.Event.Title, !order.Event.IsCancelled);
     }
 
     public async Task<IReadOnlyList<OrderResponse>?> GetEventOrdersAsync(Guid eventId, Guid organizerId, bool isPlatformAdmin)
@@ -457,7 +703,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
             .ThenInclude(order => order.Event)
             .SingleOrDefaultAsync(candidate => candidate.Id == ticketId);
         if (ticket is null) return null;
-        if (ticket.Status is TicketStatus.Cancelled or TicketStatus.Refunded) return null;
+        if (ticket.Status is TicketStatus.Cancelled or TicketStatus.Refunded || ticket.OrderItem.Order.Event.IsCancelled) return null;
         var order = ticket.OrderItem.Order;
         if (order.AttendeeId != requesterId && order.Event.OrganizerId != requesterId && !isPlatformAdmin)
         {
@@ -521,18 +767,22 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
     }
 
     /// <summary>Marks the order confirmed, creates one ticket per item and moves reserved counters to sold/issued.</summary>
-    private static void ConfirmOrder(Order order, Event ev, Dictionary<Guid, TicketType> types)
+    private void ConfirmOrder(Order order, Event ev, Dictionary<Guid, TicketType> types)
     {
         order.Status = OrderStatus.Confirmed;
         foreach (var item in order.Items)
         {
-            item.Ticket = new Ticket
+            var ticket = new Ticket
             {
+                OrderItemId = item.Id,
+                OrderItem = item,
                 EventId = ev.Id,
                 Code = CreateTicketCode(),
                 AttendeeName = order.AttendeeName,
                 AttendeeEmail = order.AttendeeEmail
             };
+            item.Ticket = ticket;
+            db.Tickets.Add(ticket);
         }
 
         AdjustCounters(ev, types, order.Items, reservedSign: -1, soldSign: 1);
@@ -617,7 +867,8 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
             order.DiscountTotal,
             order.FeeTotal,
             order.Status == OrderStatus.Pending ? order.CreatedAt + ReservationTime : null,
-            latestPayment?.Status.ToString());
+            latestPayment?.Status.ToString(),
+            order.PromoCode);
     }
 
     private static byte[] GenerateQr(string code)
@@ -628,7 +879,7 @@ public sealed class TicketingService(AuthDbContext db, AuditService audit)
         return qrCode.GetGraphic(8);
     }
 
-    private static string CreateTicketCode() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+    private static string CreateTicketCode() => "TKT_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
         .TrimEnd('=')
         .Replace('+', '-')
         .Replace('/', '_');

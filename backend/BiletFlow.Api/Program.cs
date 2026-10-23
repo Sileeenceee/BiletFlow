@@ -72,7 +72,7 @@ public class Program
 
         using (var scope = app.Services.CreateScope())
         {
-            await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.EnsureCreatedAsync();
+            await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.MigrateAsync();
         }
 
         app.UseCors("Frontend");

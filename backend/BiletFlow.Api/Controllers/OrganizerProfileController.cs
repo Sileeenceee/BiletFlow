@@ -21,16 +21,47 @@ public sealed class OrganizerProfileController(OrganizerProfileService profileSe
         return profile is null ? NotFound(new { error = "Organizer profile not found." }) : Ok(profile);
     }
 
-    [HttpPut("profile")]
-    public async Task<IActionResult> UpsertProfile([FromBody] OrganizerProfileRequest request)
+    [HttpPost("profile")]
+    public async Task<IActionResult> CreateProfile([FromBody] OrganizerProfileRequest request)
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
 
-        var result = await profileService.CreateOrUpdateAsync(userId.Value, request);
-        if (result.Error is not null) return BadRequest(new { error = result.Error });
+        var result = await profileService.CreateAsync(userId.Value, request);
+        if (result.Error is not null)
+        {
+            return result.Error == "Organizer profile already exists."
+                ? Conflict(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+        }
+
+        return CreatedAtAction(nameof(GetProfile), null, result.Profile);
+    }
+
+    [HttpPut("profile")]
+    public async Task<IActionResult> UpdateProfile([FromBody] OrganizerProfileRequest request)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await profileService.UpdateAsync(userId.Value, request);
+        if (result.Error is not null)
+        {
+            return result.Error == "Organizer profile not found."
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+        }
 
         return Ok(result.Profile);
+    }
+
+    [HttpDelete("profile")]
+    public async Task<IActionResult> DeleteProfile()
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        return await profileService.DeleteAsync(userId.Value) ? NoContent() : NotFound();
     }
 
     private Guid? GetCurrentUserId()

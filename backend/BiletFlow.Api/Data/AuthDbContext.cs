@@ -15,6 +15,13 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<PromoCampaign> PromoCampaigns => Set<PromoCampaign>();
+    public DbSet<PromoCampaignTicketType> PromoCampaignTicketTypes => Set<PromoCampaignTicketType>();
+    public DbSet<EventAdminAssignment> EventAdminAssignments => Set<EventAdminAssignment>();
+    public DbSet<TicketCheckIn> TicketCheckIns => Set<TicketCheckIn>();
+    public DbSet<SupportCase> SupportCases => Set<SupportCase>();
+    public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
+    public DbSet<InAppNotification> InAppNotifications => Set<InAppNotification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -46,6 +53,8 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(profile => profile.BusinessName).HasMaxLength(200).IsRequired();
             entity.Property(profile => profile.DisplayName).HasMaxLength(120).IsRequired();
             entity.Property(profile => profile.ContactEmail).HasMaxLength(320);
+            entity.Property(profile => profile.SandboxPayoutProvider).HasMaxLength(100);
+            entity.Property(profile => profile.SandboxPayoutReference).HasMaxLength(200);
         });
 
         modelBuilder.Entity<Event>(entity =>
@@ -56,8 +65,11 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(e => e.Description).HasMaxLength(4000).IsRequired();
             entity.Property(e => e.Venue).HasMaxLength(250).IsRequired();
             entity.Property(e => e.City).HasMaxLength(120).IsRequired();
+            entity.Property(e => e.Category).HasMaxLength(120);
+            entity.Property(e => e.ImageUrls).HasColumnType("text[]").IsRequired();
             entity.HasIndex(e => e.Slug).IsUnique();
             entity.Property(e => e.PaidSalesStatus).HasConversion<string>().HasMaxLength(32);
+            entity.Property(e => e.Visibility).HasConversion<string>().HasMaxLength(16);
             entity.ToTable(table => table.HasCheckConstraint(
                 "CK_Events_Capacity",
                 "\"Capacity\" IS NULL OR (\"Capacity\" >= 1 AND \"TicketsIssued\" + \"TicketsReserved\" <= \"Capacity\")"));
@@ -83,6 +95,36 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 table.HasCheckConstraint("CK_TicketTypes_Inventory", "\"SoldQuantity\" + \"ReservedQuantity\" <= \"Quantity\"");
                 table.HasCheckConstraint("CK_TicketTypes_Price", "\"Price\" >= 0");
             });
+
+        });
+
+        modelBuilder.Entity<PromoCampaign>(entity =>
+        {
+            entity.HasKey(campaign => campaign.Id);
+            entity.HasIndex(campaign => campaign.Code).IsUnique();
+            entity.HasIndex(campaign => campaign.CampaignToken).IsUnique();
+            entity.Property(campaign => campaign.Code).HasMaxLength(40).IsRequired();
+            entity.Property(campaign => campaign.CampaignToken).HasMaxLength(64).IsRequired();
+            entity.Property(campaign => campaign.DiscountType).HasConversion<string>().HasMaxLength(24);
+            entity.Property(campaign => campaign.DiscountValue).HasPrecision(12, 2);
+            entity.HasOne(campaign => campaign.Event).WithMany(ev => ev.PromoCampaigns)
+                .HasForeignKey(campaign => campaign.EventId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(campaign => campaign.CreatedByUser).WithMany()
+                .HasForeignKey(campaign => campaign.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint("CK_PromoCampaigns_DiscountValue", "\"DiscountValue\" > 0");
+                table.HasCheckConstraint("CK_PromoCampaigns_MaxRedemptions", "\"MaxRedemptions\" IS NULL OR \"MaxRedemptions\" > 0");
+            });
+        });
+
+        modelBuilder.Entity<PromoCampaignTicketType>(entity =>
+        {
+            entity.HasKey(row => new { row.CampaignId, row.TicketTypeId });
+            entity.HasOne(row => row.Campaign).WithMany(campaign => campaign.ApplicableTicketTypes)
+                .HasForeignKey(row => row.CampaignId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(row => row.TicketType).WithMany()
+                .HasForeignKey(row => row.TicketTypeId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Order>(entity =>
@@ -94,12 +136,15 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(order => order.Total).HasPrecision(12, 2);
             entity.Property(order => order.DiscountTotal).HasPrecision(12, 2).HasDefaultValue(0m);
             entity.Property(order => order.FeeTotal).HasPrecision(12, 2).HasDefaultValue(0m);
+            entity.Property(order => order.PromoCode).HasMaxLength(40);
             entity.HasIndex(order => new { order.AttendeeId, order.CreatedAt });
             entity.HasIndex(order => new { order.Status, order.CreatedAt });
             entity.HasOne(order => order.Attendee).WithMany(user => user.Orders)
                 .HasForeignKey(order => order.AttendeeId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(order => order.Event).WithMany(ev => ev.Orders)
                 .HasForeignKey(order => order.EventId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(order => order.PromoCampaign).WithMany(campaign => campaign.Orders)
+                .HasForeignKey(order => order.PromoCampaignId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<OrderItem>(entity =>
@@ -148,6 +193,68 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(log => log.EntityType).HasMaxLength(64).IsRequired();
             entity.Property(log => log.Description).HasMaxLength(500).IsRequired();
             entity.HasIndex(log => new { log.EventId, log.CreatedAt });
+        });
+
+        modelBuilder.Entity<EventAdminAssignment>(entity =>
+        {
+            entity.HasKey(assignment => assignment.Id);
+            entity.HasIndex(assignment => new { assignment.EventId, assignment.UserId }).IsUnique();
+            entity.HasOne(assignment => assignment.Event).WithMany()
+                .HasForeignKey(assignment => assignment.EventId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(assignment => assignment.User).WithMany(user => user.EventAdminAssignments)
+                .HasForeignKey(assignment => assignment.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AppUser>().WithMany().HasForeignKey(assignment => assignment.AssignedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TicketCheckIn>(entity =>
+        {
+            entity.HasKey(checkIn => checkIn.Id);
+            entity.HasIndex(checkIn => new { checkIn.TicketId, checkIn.CheckedInAt });
+            entity.HasOne(checkIn => checkIn.Ticket).WithMany()
+                .HasForeignKey(checkIn => checkIn.TicketId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SupportCase>(entity =>
+        {
+            entity.HasKey(supportCase => supportCase.Id);
+            entity.HasIndex(supportCase => new { supportCase.RequesterUserId, supportCase.UpdatedAt });
+            entity.Property(supportCase => supportCase.Type).HasConversion<string>().HasMaxLength(24);
+            entity.Property(supportCase => supportCase.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(supportCase => supportCase.Category).HasMaxLength(40).IsRequired();
+            entity.Property(supportCase => supportCase.Subject).HasMaxLength(200).IsRequired();
+            entity.HasOne(supportCase => supportCase.Requester).WithMany()
+                .HasForeignKey(supportCase => supportCase.RequesterUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(supportCase => supportCase.Event).WithMany()
+                .HasForeignKey(supportCase => supportCase.EventId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(supportCase => supportCase.Order).WithMany()
+                .HasForeignKey(supportCase => supportCase.OrderId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(supportCase => supportCase.Ticket).WithMany()
+                .HasForeignKey(supportCase => supportCase.TicketId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(supportCase => supportCase.AssignedToUser).WithMany()
+                .HasForeignKey(supportCase => supportCase.AssignedToUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SupportMessage>(entity =>
+        {
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Body).HasMaxLength(4000).IsRequired();
+            entity.HasIndex(message => new { message.CaseId, message.CreatedAt });
+            entity.HasOne(message => message.Case).WithMany(supportCase => supportCase.Messages)
+                .HasForeignKey(message => message.CaseId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(message => message.Sender).WithMany()
+                .HasForeignKey(message => message.SenderUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<InAppNotification>(entity =>
+        {
+            entity.HasKey(notification => notification.Id);
+            entity.HasIndex(notification => new { notification.UserId, notification.CreatedAt });
+            entity.Property(notification => notification.Type).HasMaxLength(40).IsRequired();
+            entity.Property(notification => notification.Title).HasMaxLength(160).IsRequired();
+            entity.Property(notification => notification.Message).HasMaxLength(500).IsRequired();
+            entity.HasOne(notification => notification.User).WithMany()
+                .HasForeignKey(notification => notification.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

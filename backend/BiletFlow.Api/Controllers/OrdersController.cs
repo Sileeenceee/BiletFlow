@@ -9,7 +9,7 @@ namespace BiletFlow.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/orders")]
-public sealed class OrdersController(TicketingService ticketingService) : ControllerBase
+public sealed class OrdersController(TicketingService ticketingService, TicketDocumentService ticketDocuments) : ControllerBase
 {
     [HttpPost("checkout")]
     public async Task<IActionResult> Checkout([FromBody] CheckoutRequest request)
@@ -26,6 +26,16 @@ public sealed class OrdersController(TicketingService ticketingService) : Contro
         }
 
         return CreatedAtAction(nameof(GetById), new { orderId = result.Order.Id }, result.Order);
+    }
+
+    [HttpPut("{orderId:guid}")]
+    public async Task<IActionResult> UpdatePendingOrder(Guid orderId, [FromBody] UpdateOrderRequest request)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.UpdatePendingOrderAsync(orderId, userId.Value, request);
+        return ToActionResult(result.Order, result.Error, result.Kind);
     }
 
     /// <summary>Payment simulation: body { "outcome": "succeeded" | "failed" }.</summary>
@@ -47,6 +57,26 @@ public sealed class OrdersController(TicketingService ticketingService) : Contro
 
         var result = await ticketingService.CancelOwnOrderAsync(orderId, userId.Value);
         return ToActionResult(result.Order, result.Error, result.Kind);
+    }
+
+    [HttpDelete("{orderId:guid}")]
+    public async Task<IActionResult> DeletePendingOrder(Guid orderId)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var result = await ticketingService.CancelOwnOrderAsync(orderId, userId.Value);
+        if (result.Order is null)
+        {
+            return result.Kind switch
+            {
+                ServiceError.NotFound => NotFound(new { error = result.Error }),
+                ServiceError.Conflict => Conflict(new { error = result.Error }),
+                _ => BadRequest(new { error = result.Error })
+            };
+        }
+
+        return NoContent();
     }
 
     [HttpPost("/api/events/{eventId:guid}/orders/{orderId:guid}/cancel")]
@@ -108,6 +138,16 @@ public sealed class OrdersController(TicketingService ticketingService) : Contro
 
         var qrImage = await ticketingService.GetTicketQrAsync(ticketId, userId.Value, IsPlatformAdmin());
         return qrImage is null ? NotFound() : File(qrImage, "image/png", $"ticket-{ticketId}.png");
+    }
+
+    [HttpGet("/api/tickets/{ticketId:guid}/pdf")]
+    public async Task<IActionResult> GetTicketPdf(Guid ticketId)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+
+        var pdf = await ticketDocuments.CreatePdfAsync(ticketId, userId.Value, IsPlatformAdmin());
+        return pdf is null ? NotFound() : File(pdf, "application/pdf", $"ticket-{ticketId}.pdf");
     }
 
     private IActionResult ToActionResult(OrderResponse? order, string? error, ServiceError kind) => order is not null
