@@ -1,32 +1,40 @@
-# React + TypeScript + Vite
+# BiletFlow frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Responsive React and TypeScript web client for the BiletFlow ticketing API.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From this directory:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm ci
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Vite proxies `/api` requests to `https://localhost:6969` by default. Set
+`VITE_API_PROXY_TARGET` to override the API target, or set `VITE_API_BASE_URL`
+when building a frontend that is served separately from the API.
+
+## Week 1–8 workflows
+
+- Public event discovery, search, event details, attendee registration, and organizer event setup.
+- Ticket inventory and availability management, free checkout, pending reservations, and clearly labelled payment simulation.
+- Attendee order history, ticket QR/PDF downloads, and `.ics` calendar export.
+- Promo codes, shareable campaign links and QR codes, and campaign analytics.
+- Organizer profile, ticket-holder and order views, and event administrator assignment.
+- Responsive event-admin check-in with camera QR scanning where supported, manual code entry, attendee lookup, check-in summaries, and check-in reversal.
+- Support cases, threaded replies, status updates for staff, and in-app support notifications.
+
+The application does not collect real payments or configure real payouts.
+
+## Checks
+
+```sh
+npm run build
+npm run lint
+npm run test:run
+```
+
+To run the complete app with PostgreSQL and the backend, use
+`docker compose up --build` from the repository root and open
+`http://localhost:8080`.

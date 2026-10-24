@@ -1,12 +1,17 @@
 using System.Security.Cryptography;
 using BiletFlow.Api.Data;
 using BiletFlow.Api.Models;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using QRCoder;
 
 namespace BiletFlow.Api.Services;
 
-public sealed class PromoCampaignService(AuthDbContext db, AuditService audit, IConfiguration configuration)
+public sealed class PromoCampaignService(
+    AuthDbContext db,
+    AuditService audit,
+    IConfiguration configuration,
+    IWebHostEnvironment environment)
 {
     public async Task<IReadOnlyList<PromoCampaignResponse>?> GetForEventAsync(
         Guid eventId, Guid userId, bool isPlatformAdmin)
@@ -303,10 +308,13 @@ public sealed class PromoCampaignService(AuthDbContext db, AuditService audit, I
 
     private string BuildCampaignUrl(string token)
     {
-        var baseUrl = configuration["PublicAppBaseUrl"] ?? "https://localhost:8080";
-        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+        var defaultBaseUrl = environment.IsDevelopment() ? "http://localhost:8080" : "https://localhost:8080";
+        var baseUrl = configuration["PublicAppBaseUrl"] ?? defaultBaseUrl;
+        var isAllowedScheme = Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttps || (environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp));
+        if (!isAllowedScheme)
         {
-            throw new InvalidOperationException("PublicAppBaseUrl must be an absolute HTTPS URL.");
+            throw new InvalidOperationException("PublicAppBaseUrl must be absolute HTTPS, except for HTTP in Development.");
         }
 
         return $"{baseUrl.TrimEnd('/')}/campaign/{Uri.EscapeDataString(token)}";

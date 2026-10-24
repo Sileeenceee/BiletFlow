@@ -43,6 +43,8 @@ During local development, Vite proxies `/api` requests to `https://localhost:696
 
 To build and run the frontend, API, and database in Docker, run `docker compose up --build` from the repository root. Open the frontend at `http://localhost:8080`; its `/api` requests are proxied to the API container.
 
+The responsive frontend implements the scheduled week 1–8 attendee, organizer, ticketing, campaign, calendar/PDF ticket, event-admin verification, and support workflows. The paid checkout and payout options are simulations only; they do not collect real payments or configure real payouts. For a production frontend origin, set `PublicAppBaseUrl` to its HTTPS URL so campaign links and QR codes point to the deployed application.
+
 ## Database migrations
 
 Database schema changes are managed with EF Core migrations in `backend/BiletFlow.Api/Data/EfMigrations`. The API applies pending migrations at startup with `Database.MigrateAsync()`. A fresh Compose database is therefore initialized automatically when the API starts.

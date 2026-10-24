@@ -14,11 +14,25 @@ const schema = z
     city: z.string().min(1, 'Required'),
     startsAt: z.string().min(1, 'Required'),
     endsAt: z.string().min(1, 'Required'),
+    category: z.string().max(80, 'At most 80 characters'),
+    capacity: z.string(),
+    registrationOpensAt: z.string(),
+    registrationClosesAt: z.string(),
+    visibility: z.enum(['Public', 'Unlisted', 'Private']),
+    imageUrls: z.string(),
     isPublished: z.boolean(),
   })
   .refine((d) => new Date(d.endsAt) > new Date(d.startsAt), {
     message: 'End must be after start',
     path: ['endsAt'],
+  })
+  .refine((d) => !d.capacity || (Number.isInteger(Number(d.capacity)) && Number(d.capacity) > 0), {
+    message: 'Capacity must be a positive whole number',
+    path: ['capacity'],
+  })
+  .refine((d) => !d.registrationOpensAt || !d.registrationClosesAt || new Date(d.registrationClosesAt) > new Date(d.registrationOpensAt), {
+    message: 'Registration close must be after open',
+    path: ['registrationClosesAt'],
   })
 
 type FormValues = z.infer<typeof schema>
@@ -33,7 +47,15 @@ export default function CreateEvent() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { isPublished: false },
+    defaultValues: {
+      isPublished: false,
+      category: '',
+      capacity: '',
+      registrationOpensAt: '',
+      registrationClosesAt: '',
+      visibility: 'Public',
+      imageUrls: '',
+    },
   })
 
   async function onSubmit(values: FormValues) {
@@ -47,6 +69,12 @@ export default function CreateEvent() {
         startDateUtc: new Date(values.startsAt).toISOString(),
         endDateUtc: new Date(values.endsAt).toISOString(),
         isPublished: values.isPublished,
+        ...(values.category.trim() ? { category: values.category.trim() } : {}),
+        ...(values.capacity ? { capacity: Number(values.capacity) } : {}),
+        ...(values.registrationOpensAt ? { registrationOpensAt: new Date(values.registrationOpensAt).toISOString() } : {}),
+        ...(values.registrationClosesAt ? { registrationClosesAt: new Date(values.registrationClosesAt).toISOString() } : {}),
+        ...(values.visibility !== 'Public' ? { visibility: values.visibility } : {}),
+        ...(values.imageUrls.trim() ? { imageUrls: values.imageUrls.split(/\r?\n/).map((url) => url.trim()).filter(Boolean) } : {}),
       })
       navigate('/events')
     } catch (err) {
@@ -55,8 +83,8 @@ export default function CreateEvent() {
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="max-w-2xl space-y-5">
-      <h1 className="text-2xl font-bold">Create event</h1>
+    <form onSubmit={handleSubmit(onSubmit)} className="mx-auto max-w-3xl space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-9">
+      <div><p className="text-sm font-semibold text-indigo-600">Organizer workspace</p><h1 className="mt-1 text-3xl font-black tracking-tight">Create an event</h1><p className="mt-2 text-sm text-slate-500">Set up the basics now. You can configure ticket types, campaigns, and event staff after saving.</p></div>
 
       <Field id="title" label="Title" error={errors.title?.message}>
         <input id="title" {...register('title')} className={inputClass} />
@@ -72,7 +100,7 @@ export default function CreateEvent() {
       </Field>
 
       <fieldset className="space-y-4">
-        <legend className="text-sm font-medium mb-1">Venue</legend>
+        <legend className="mb-1 text-sm font-semibold text-slate-800">Venue</legend>
 
         <Field id="venue" label="Name" error={errors.venue?.message}>
           <input id="venue" {...register('venue')} className={inputClass} />
@@ -88,7 +116,7 @@ export default function CreateEvent() {
       </fieldset>
 
       <fieldset className="space-y-4">
-        <legend className="text-sm font-medium mb-1">When</legend>
+        <legend className="mb-1 text-sm font-semibold text-slate-800">When</legend>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field id="startsAt" label="Starts" error={errors.startsAt?.message}>
@@ -110,6 +138,31 @@ export default function CreateEvent() {
           </Field>
         </div>
       </fieldset>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field id="category" label="Category">
+          <input id="category" {...register('category')} placeholder="Music, community, workshop…" className={inputClass} />
+        </Field>
+        <Field id="visibility" label="Visibility">
+          <select id="visibility" {...register('visibility')} className={inputClass}>
+            <option value="Public">Public — listed for everyone</option>
+            <option value="Unlisted">Unlisted — share a direct link</option>
+            <option value="Private">Private — organizer only</option>
+          </select>
+        </Field>
+        <Field id="capacity" label="Event capacity (optional)" error={errors.capacity?.message}>
+          <input id="capacity" type="number" min={1} step={1} {...register('capacity')} className={inputClass} />
+        </Field>
+        <Field id="registrationOpensAt" label="Registration opens (optional)">
+          <input id="registrationOpensAt" type="datetime-local" {...register('registrationOpensAt')} className={inputClass} />
+        </Field>
+        <Field id="registrationClosesAt" label="Registration closes (optional)" error={errors.registrationClosesAt?.message}>
+          <input id="registrationClosesAt" type="datetime-local" {...register('registrationClosesAt')} className={inputClass} />
+        </Field>
+        <Field id="imageUrls" label="Image URLs (optional, one per line)">
+          <textarea id="imageUrls" rows={2} {...register('imageUrls')} className={inputClass} />
+        </Field>
+      </div>
 
       <label htmlFor="isPublished" className="flex items-center gap-2 text-sm">
         <input id="isPublished" type="checkbox" {...register('isPublished')} />

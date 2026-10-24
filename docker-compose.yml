@@ -29,6 +29,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=biletflow;Username=biletflow;Password=biletflow123
+      PublicAppBaseUrl: http://localhost:8080
       ASPNETCORE_URLS: http://+:6767;https://+:6969
       ASPNETCORE_Kestrel__Certificates__Default__Path: /https/devcert.pfx
       ASPNETCORE_Kestrel__Certificates__Default__Password: changeit

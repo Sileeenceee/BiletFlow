@@ -23,9 +23,22 @@ type Options = RequestInit & {
 
 export async function apiFetch<T>(path: string, options: Options = {}): Promise<T> {
   const { redirectOnUnauthorized = true, ...init } = options
-  const token = getToken()
+  const res = await send(path, init)
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  await assertSuccess(res, redirectOnUnauthorized)
+
+  return (await readBody<T>(res)) as T
+}
+
+export async function apiBlob(path: string): Promise<Blob> {
+  const res = await send(path)
+  await assertSuccess(res, true)
+  return res.blob()
+}
+
+async function send(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = getToken()
+  return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -33,18 +46,16 @@ export async function apiFetch<T>(path: string, options: Options = {}): Promise<
       ...init.headers,
     },
   })
+}
 
+async function assertSuccess(res: Response, redirectOnUnauthorized: boolean) {
   if (res.status === 401 && redirectOnUnauthorized) {
     clearSession()
     window.location.href = '/login'
     throw new ApiError(401, 'Your session expired. Sign in again.')
   }
 
-  if (!res.ok) {
-    throw new ApiError(res.status, await readErrorMessage(res))
-  }
-
-  return (await readBody<T>(res)) as T
+  if (!res.ok) throw new ApiError(res.status, await readErrorMessage(res))
 }
 
 /**
@@ -58,6 +69,7 @@ async function readErrorMessage(res: Response): Promise<string> {
   try {
     const body = await res.json()
     if (typeof body?.error === 'string') return body.error
+    if (typeof body?.message === 'string') return body.message
     if (typeof body?.detail === 'string') return body.detail
     if (typeof body?.title === 'string') return body.title
   } catch {
