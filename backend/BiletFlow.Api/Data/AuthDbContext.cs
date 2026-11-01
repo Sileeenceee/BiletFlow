@@ -22,6 +22,11 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<SupportCase> SupportCases => Set<SupportCase>();
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
     public DbSet<InAppNotification> InAppNotifications => Set<InAppNotification>();
+    public DbSet<Venue> Venues => Set<Venue>();
+    public DbSet<VenueSection> VenueSections => Set<VenueSection>();
+    public DbSet<Seat> Seats => Set<Seat>();
+    public DbSet<TicketTypeSection> TicketTypeSections => Set<TicketTypeSection>();
+    public DbSet<SeatHold> SeatHolds => Set<SeatHold>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +36,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.HasIndex(user => user.Email).IsUnique();
             entity.Property(user => user.Email).HasMaxLength(320).IsRequired();
             entity.Property(user => user.PasswordHash).IsRequired();
+            entity.Property(user => user.FullName).HasMaxLength(200).IsRequired();
             entity.Property(user => user.Role).HasConversion<string>().HasMaxLength(32);
             entity.HasOne(user => user.OrganizerProfile)
                 .WithOne(profile => profile.User)
@@ -70,9 +76,16 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.HasIndex(e => e.Slug).IsUnique();
             entity.Property(e => e.PaidSalesStatus).HasConversion<string>().HasMaxLength(32);
             entity.Property(e => e.Visibility).HasConversion<string>().HasMaxLength(16);
-            entity.ToTable(table => table.HasCheckConstraint(
-                "CK_Events_Capacity",
-                "\"Capacity\" IS NULL OR (\"Capacity\" >= 1 AND \"TicketsIssued\" + \"TicketsReserved\" <= \"Capacity\")"));
+            entity.Property(e => e.VenueAddress).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.SeatingMode).HasConversion<string>().HasMaxLength(32);
+            entity.Property(e => e.Timezone).HasMaxLength(64).IsRequired().HasDefaultValue("Asia/Almaty");
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_Events_Capacity",
+                    "\"Capacity\" IS NULL OR (\"Capacity\" >= 1 AND \"TicketsIssued\" + \"TicketsReserved\" <= \"Capacity\")");
+                table.HasCheckConstraint("CK_Events_Dates", "\"EndDateUtc\" > \"StartDateUtc\"");
+            });
             entity.HasOne(e => e.Organizer)
                 .WithMany(user => user.Events)
                 .HasForeignKey(e => e.OrganizerId)
@@ -81,6 +94,8 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 .WithOne(ticketType => ticketType.Event)
                 .HasForeignKey(ticketType => ticketType.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.SeatingVenue).WithMany()
+                .HasForeignKey(e => e.VenueId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TicketType>(entity =>
@@ -94,6 +109,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             {
                 table.HasCheckConstraint("CK_TicketTypes_Inventory", "\"SoldQuantity\" + \"ReservedQuantity\" <= \"Quantity\"");
                 table.HasCheckConstraint("CK_TicketTypes_Price", "\"Price\" >= 0");
+                table.HasCheckConstraint("CK_TicketTypes_SalesWindow", "\"SalesEndAt\" > \"SalesStartAt\"");
             });
 
         });
@@ -137,7 +153,10 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(order => order.DiscountTotal).HasPrecision(12, 2).HasDefaultValue(0m);
             entity.Property(order => order.FeeTotal).HasPrecision(12, 2).HasDefaultValue(0m);
             entity.Property(order => order.PromoCode).HasMaxLength(40);
-            entity.HasIndex(order => new { order.AttendeeId, order.CreatedAt });
+            entity.HasIndex(order => new { order.AttendeeId, order.CreatedAt }).IsDescending(false, true);
+            entity.HasIndex(order => new { order.EventId, order.CreatedAt });
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_Orders_Amounts", "\"Total\" >= 0 AND \"DiscountTotal\" >= 0 AND \"FeeTotal\" >= 0"));
             entity.HasIndex(order => new { order.Status, order.CreatedAt });
             entity.HasOne(order => order.Attendee).WithMany(user => user.Orders)
                 .HasForeignKey(order => order.AttendeeId).OnDelete(DeleteBehavior.Restrict);
@@ -157,6 +176,11 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 .HasForeignKey(item => item.OrderId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(item => item.TicketType).WithMany(ticketType => ticketType.OrderItems)
                 .HasForeignKey(item => item.TicketTypeId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(item => item.Seat).WithMany()
+                .HasForeignKey(item => item.SeatId).OnDelete(DeleteBehavior.Restrict);
+            // Kept explicitly: the partial index below skips rows without a seat, and EF would otherwise drop this one.
+            entity.HasIndex(item => item.OrderId);
+            entity.HasIndex(item => new { item.OrderId, item.SeatId }).IsUnique().HasFilter("\"SeatId\" IS NOT NULL");
         });
 
         modelBuilder.Entity<Ticket>(entity =>
@@ -173,6 +197,11 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 .HasForeignKey<Ticket>(ticket => ticket.OrderItemId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(ticket => ticket.Event).WithMany()
                 .HasForeignKey(ticket => ticket.EventId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(ticket => ticket.Seat).WithMany()
+                .HasForeignKey(ticket => ticket.SeatId).OnDelete(DeleteBehavior.Restrict);
+            // A seat can belong to only one live ticket per event; cancelled and refunded tickets free it.
+            entity.HasIndex(ticket => new { ticket.EventId, ticket.SeatId }).IsUnique()
+                .HasFilter("\"SeatId\" IS NOT NULL AND \"Status\" NOT IN ('Cancelled', 'Refunded')");
         });
 
         modelBuilder.Entity<Payment>(entity =>
@@ -192,7 +221,8 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(log => log.ActionType).HasConversion<string>().HasMaxLength(32);
             entity.Property(log => log.EntityType).HasMaxLength(64).IsRequired();
             entity.Property(log => log.Description).HasMaxLength(500).IsRequired();
-            entity.HasIndex(log => new { log.EventId, log.CreatedAt });
+            entity.HasIndex(log => new { log.EventId, log.CreatedAt }).IsDescending(false, true);
+            entity.HasIndex(log => new { log.EventId, log.ActionType });
         });
 
         modelBuilder.Entity<EventAdminAssignment>(entity =>
@@ -255,6 +285,57 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(notification => notification.Message).HasMaxLength(500).IsRequired();
             entity.HasOne(notification => notification.User).WithMany()
                 .HasForeignKey(notification => notification.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Venue>(entity =>
+        {
+            entity.HasKey(venue => venue.Id);
+            entity.Property(venue => venue.Name).HasMaxLength(200).IsRequired();
+            entity.Property(venue => venue.Address).HasMaxLength(300).IsRequired();
+        });
+
+        modelBuilder.Entity<VenueSection>(entity =>
+        {
+            entity.HasKey(section => section.Id);
+            entity.Property(section => section.Name).HasMaxLength(100).IsRequired();
+            entity.HasOne(section => section.Venue).WithMany(venue => venue.Sections)
+                .HasForeignKey(section => section.VenueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Seat>(entity =>
+        {
+            entity.HasKey(seat => seat.Id);
+            entity.Property(seat => seat.RowLabel).HasMaxLength(20).IsRequired();
+            entity.Property(seat => seat.Number).HasMaxLength(20).IsRequired();
+            entity.HasIndex(seat => new { seat.SectionId, seat.RowLabel, seat.Number }).IsUnique();
+            entity.HasOne(seat => seat.Section).WithMany(section => section.Seats)
+                .HasForeignKey(seat => seat.SectionId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketTypeSection>(entity =>
+        {
+            entity.HasKey(link => link.Id);
+            // One section is served by one ticket type, so the price of a seat is unambiguous.
+            entity.HasIndex(link => new { link.EventId, link.SectionId }).IsUnique();
+            entity.HasOne(link => link.Event).WithMany()
+                .HasForeignKey(link => link.EventId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(link => link.TicketType).WithMany()
+                .HasForeignKey(link => link.TicketTypeId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(link => link.Section).WithMany()
+                .HasForeignKey(link => link.SectionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SeatHold>(entity =>
+        {
+            entity.HasKey(hold => hold.Id);
+            // Expired holds are deleted before a new one is inserted; the index cannot use now().
+            entity.HasIndex(hold => new { hold.EventId, hold.SeatId }).IsUnique();
+            entity.HasOne(hold => hold.Event).WithMany()
+                .HasForeignKey(hold => hold.EventId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(hold => hold.Seat).WithMany()
+                .HasForeignKey(hold => hold.SeatId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(hold => hold.Order).WithMany()
+                .HasForeignKey(hold => hold.OrderId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

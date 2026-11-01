@@ -25,6 +25,7 @@ public sealed class AppUser
     public Guid Id { get; set; } = Guid.NewGuid();
     public required string Email { get; set; }
     public required string PasswordHash { get; set; }
+    public string FullName { get; set; } = string.Empty;
     public UserRole Role { get; set; } = UserRole.Attendee;
     public bool EmailConfirmed { get; set; }
     public bool IsSuspended { get; set; }
@@ -77,6 +78,16 @@ public sealed class Event
     public string Description { get; set; } = string.Empty;
     public string Venue { get; set; } = string.Empty;
     public string City { get; set; } = string.Empty;
+    public string VenueAddress { get; set; } = string.Empty;
+    /// <summary>Venue layout for events with assigned seating; null for general admission.</summary>
+    public Guid? VenueId { get; set; }
+    [JsonIgnore]
+    public Venue? SeatingVenue { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public SeatingMode SeatingMode { get; set; } = SeatingMode.General;
+    /// <summary>IANA time zone of the event, for example Asia/Almaty.</summary>
+    public string Timezone { get; set; } = "Asia/Almaty";
+    public string? RefundPolicy { get; set; }
     public string? Category { get; set; }
     public string[] ImageUrls { get; set; } = [];
     public DateTimeOffset StartDateUtc { get; set; }
@@ -163,6 +174,10 @@ public sealed class OrderItem
     public required string TicketTypeName { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal DiscountAmount { get; set; }
+    /// <summary>Chosen seat for events with assigned seating; null otherwise.</summary>
+    public Guid? SeatId { get; set; }
+    [JsonIgnore]
+    public Seat? Seat { get; set; }
     /// <summary>Created only after the order is confirmed (free checkout or successful payment).</summary>
     [JsonIgnore]
     public Ticket? Ticket { get; set; }
@@ -181,6 +196,10 @@ public sealed class Ticket
     public required string AttendeeName { get; set; }
     public required string AttendeeEmail { get; set; }
     public TicketStatus Status { get; set; } = TicketStatus.Valid;
+    /// <summary>Seat of the ticket for events with assigned seating; null otherwise.</summary>
+    public Guid? SeatId { get; set; }
+    [JsonIgnore]
+    public Seat? Seat { get; set; }
 }
 
 public sealed class Payment

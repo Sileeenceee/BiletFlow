@@ -39,6 +39,11 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<bool>("EmailConfirmed")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<bool>("IsSuspended")
                         .HasColumnType("boolean");
 
@@ -94,7 +99,10 @@ namespace BiletFlow.Api.Data.EfMigrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EventId", "CreatedAt");
+                    b.HasIndex("EventId", "ActionType");
+
+                    b.HasIndex("EventId", "CreatedAt")
+                        .IsDescending(false, true);
 
                     b.ToTable("AuditLogs");
                 });
@@ -180,11 +188,19 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<bool>("PaidTermsAccepted")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("RefundPolicy")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset?>("RegistrationClosesAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("RegistrationOpensAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SeatingMode")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<string>("Slug")
                         .IsRequired()
@@ -200,6 +216,13 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<int>("TicketsReserved")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Timezone")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasDefaultValue("Asia/Almaty");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -213,6 +236,14 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasMaxLength(250)
                         .HasColumnType("character varying(250)");
 
+                    b.Property<string>("VenueAddress")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<Guid?>("VenueId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Visibility")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -225,9 +256,13 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.HasIndex("Slug")
                         .IsUnique();
 
+                    b.HasIndex("VenueId");
+
                     b.ToTable("Events", t =>
                         {
                             t.HasCheckConstraint("CK_Events_Capacity", "\"Capacity\" IS NULL OR (\"Capacity\" >= 1 AND \"TicketsIssued\" + \"TicketsReserved\" <= \"Capacity\")");
+
+                            t.HasCheckConstraint("CK_Events_Dates", "\"EndDateUtc\" > \"StartDateUtc\"");
                         });
                 });
 
@@ -356,15 +391,19 @@ namespace BiletFlow.Api.Data.EfMigrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EventId");
-
                     b.HasIndex("PromoCampaignId");
 
-                    b.HasIndex("AttendeeId", "CreatedAt");
+                    b.HasIndex("AttendeeId", "CreatedAt")
+                        .IsDescending(false, true);
+
+                    b.HasIndex("EventId", "CreatedAt");
 
                     b.HasIndex("Status", "CreatedAt");
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", t =>
+                        {
+                            t.HasCheckConstraint("CK_Orders_Amounts", "\"Total\" >= 0 AND \"DiscountTotal\" >= 0 AND \"FeeTotal\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.OrderItem", b =>
@@ -380,6 +419,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasDefaultValue(0m);
 
                     b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("SeatId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid>("TicketTypeId")
@@ -398,7 +440,13 @@ namespace BiletFlow.Api.Data.EfMigrations
 
                     b.HasIndex("OrderId");
 
+                    b.HasIndex("SeatId");
+
                     b.HasIndex("TicketTypeId");
+
+                    b.HasIndex("OrderId", "SeatId")
+                        .IsUnique()
+                        .HasFilter("\"SeatId\" IS NOT NULL");
 
                     b.ToTable("OrderItems");
                 });
@@ -568,6 +616,66 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.ToTable("PromoCampaignTicketTypes");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.Seat", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsAccessible")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("RowLabel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("SectionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SectionId", "RowLabel", "Number")
+                        .IsUnique();
+
+                    b.ToTable("Seats");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.SeatHold", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SeatId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("SeatId");
+
+                    b.HasIndex("EventId", "SeatId")
+                        .IsUnique();
+
+                    b.ToTable("SeatHolds");
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.SupportCase", b =>
                 {
                     b.Property<Guid>("Id")
@@ -686,6 +794,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<Guid>("OrderItemId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("SeatId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -698,6 +809,12 @@ namespace BiletFlow.Api.Data.EfMigrations
 
                     b.HasIndex("OrderItemId")
                         .IsUnique();
+
+                    b.HasIndex("SeatId");
+
+                    b.HasIndex("EventId", "SeatId")
+                        .IsUnique()
+                        .HasFilter("\"SeatId\" IS NOT NULL AND \"Status\" NOT IN ('Cancelled', 'Refunded')");
 
                     b.HasIndex("EventId", "Status");
 
@@ -790,7 +907,78 @@ namespace BiletFlow.Api.Data.EfMigrations
                             t.HasCheckConstraint("CK_TicketTypes_Inventory", "\"SoldQuantity\" + \"ReservedQuantity\" <= \"Quantity\"");
 
                             t.HasCheckConstraint("CK_TicketTypes_Price", "\"Price\" >= 0");
+
+                            t.HasCheckConstraint("CK_TicketTypes_SalesWindow", "\"SalesEndAt\" > \"SalesStartAt\"");
                         });
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.TicketTypeSection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TicketTypeId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SectionId");
+
+                    b.HasIndex("TicketTypeId");
+
+                    b.HasIndex("EventId", "SectionId")
+                        .IsUnique();
+
+                    b.ToTable("TicketTypeSections");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.Venue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Venues");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.VenueSection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("VenueId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("VenueId");
+
+                    b.ToTable("VenueSections");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.AuthToken", b =>
@@ -812,7 +1000,14 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("BiletFlow.Api.Models.Venue", "SeatingVenue")
+                        .WithMany()
+                        .HasForeignKey("VenueId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Organizer");
+
+                    b.Navigation("SeatingVenue");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.EventAdminAssignment", b =>
@@ -885,6 +1080,11 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("BiletFlow.Api.Models.Seat", "Seat")
+                        .WithMany()
+                        .HasForeignKey("SeatId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("BiletFlow.Api.Models.TicketType", "TicketType")
                         .WithMany("OrderItems")
                         .HasForeignKey("TicketTypeId")
@@ -892,6 +1092,8 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .IsRequired();
 
                     b.Navigation("Order");
+
+                    b.Navigation("Seat");
 
                     b.Navigation("TicketType");
                 });
@@ -954,6 +1156,44 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Navigation("Campaign");
 
                     b.Navigation("TicketType");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.Seat", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.VenueSection", "Section")
+                        .WithMany("Seats")
+                        .HasForeignKey("SectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Section");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.SeatHold", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.Order", "Order")
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.Seat", "Seat")
+                        .WithMany()
+                        .HasForeignKey("SeatId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Event");
+
+                    b.Navigation("Order");
+
+                    b.Navigation("Seat");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.SupportCase", b =>
@@ -1028,9 +1268,16 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("BiletFlow.Api.Models.Seat", "Seat")
+                        .WithMany()
+                        .HasForeignKey("SeatId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Event");
 
                     b.Navigation("OrderItem");
+
+                    b.Navigation("Seat");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.TicketCheckIn", b =>
@@ -1053,6 +1300,44 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .IsRequired();
 
                     b.Navigation("Event");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.TicketTypeSection", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.VenueSection", "Section")
+                        .WithMany()
+                        .HasForeignKey("SectionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.TicketType", "TicketType")
+                        .WithMany()
+                        .HasForeignKey("TicketTypeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Event");
+
+                    b.Navigation("Section");
+
+                    b.Navigation("TicketType");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.VenueSection", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Venue", "Venue")
+                        .WithMany("Sections")
+                        .HasForeignKey("VenueId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Venue");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.AppUser", b =>
@@ -1102,6 +1387,16 @@ namespace BiletFlow.Api.Data.EfMigrations
             modelBuilder.Entity("BiletFlow.Api.Models.TicketType", b =>
                 {
                     b.Navigation("OrderItems");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.Venue", b =>
+                {
+                    b.Navigation("Sections");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.VenueSection", b =>
+                {
+                    b.Navigation("Seats");
                 });
 #pragma warning restore 612, 618
         }
