@@ -1,4 +1,5 @@
 
+using System.Security.Claims;
 using System.Text;
 using BiletFlow.Api.Data;
 using BiletFlow.Api.Models;
@@ -32,6 +33,16 @@ public class Program
         builder.Services.AddScoped<TicketDocumentService>();
         builder.Services.AddScoped<TicketVerificationService>();
         builder.Services.AddScoped<SupportService>();
+        builder.Services.AddScoped<NotificationService>();
+        builder.Services.AddScoped<PlatformSettingsService>();
+        builder.Services.AddScoped<SeatingService>();
+        builder.Services.AddScoped<PaidSalesService>();
+        builder.Services.AddScoped<AnalyticsService>();
+        builder.Services.AddScoped<CalendarService>();
+        builder.Services.AddScoped<AdminService>();
+        builder.Services.AddScoped<DataSeeder>();
+        builder.Services.AddSingleton<EmailQueue>();
+        builder.Services.AddHostedService<EmailSenderBackgroundService>();
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
@@ -43,6 +54,36 @@ public class Program
                     ValidateAudience = false,
                     ValidateLifetime = true,
                     ClockSkew = TimeSpan.FromSeconds(30)
+                };
+                options.Events = new JwtBearerEvents
+                {
+                    // Suspension and role changes take effect on the next request instead of when the token expires.
+                    OnTokenValidated = async context =>
+                    {
+                        var principal = context.Principal!;
+                        var subject = principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? principal.FindFirstValue("sub");
+                        if (!Guid.TryParse(subject, out var userId))
+                        {
+                            context.Fail("Invalid subject.");
+                            return;
+                        }
+
+                        var db = context.HttpContext.RequestServices.GetRequiredService<AuthDbContext>();
+                        var user = await db.Users.AsNoTracking().Where(candidate => candidate.Id == userId)
+                            .Select(candidate => new { candidate.Role, candidate.IsSuspended })
+                            .SingleOrDefaultAsync(context.HttpContext.RequestAborted);
+                        if (user is null || user.IsSuspended)
+                        {
+                            context.Fail("The account is suspended or no longer exists.");
+                            return;
+                        }
+
+                        if (principal.Identity is ClaimsIdentity identity)
+                        {
+                            foreach (var claim in identity.FindAll(identity.RoleClaimType).ToList()) identity.RemoveClaim(claim);
+                            identity.AddClaim(new Claim(identity.RoleClaimType, user.Role.ToString()));
+                        }
+                    }
                 };
             });
         builder.Services.AddAuthorizationBuilder()
@@ -77,12 +118,24 @@ public class Program
         using (var scope = app.Services.CreateScope())
         {
             await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.MigrateAsync();
+            await scope.ServiceProvider.GetRequiredService<DataSeeder>().SeedAsync();
         }
 
         app.UseCors("Frontend");
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseHttpsRedirection();
+        // Emails collected during a request are sent only if the request succeeded (its changes were committed).
+        app.Use(async (context, next) =>
+        {
+            await next();
+            if (context.Response.StatusCode < 400)
+            {
+                context.RequestServices.GetRequiredService<NotificationService>().FlushEmails();
+            }
+        });
+        app.MapGet("/health", async (AuthDbContext db) =>
+            await db.Database.CanConnectAsync() ? Results.Ok(new { status = "Healthy" }) : Results.StatusCode(503));
         app.MapControllers();
 
         app.Run();

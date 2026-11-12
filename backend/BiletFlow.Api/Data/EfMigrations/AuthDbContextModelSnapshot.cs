@@ -177,6 +177,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<bool>("IsPublished")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsSuspended")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("OrganizerId")
                         .HasColumnType("uuid");
 
@@ -189,7 +192,8 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("RefundPolicy")
-                        .HasColumnType("text");
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
 
                     b.Property<DateTimeOffset?>("RegistrationClosesAt")
                         .HasColumnType("timestamp with time zone");
@@ -251,12 +255,12 @@ namespace BiletFlow.Api.Data.EfMigrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizerId");
-
                     b.HasIndex("Slug")
                         .IsUnique();
 
                     b.HasIndex("VenueId");
+
+                    b.HasIndex("OrganizerId", "StartDateUtc");
 
                     b.ToTable("Events", t =>
                         {
@@ -296,6 +300,56 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.ToTable("EventAdminAssignments");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.EventReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("ReporterUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ResolutionNote")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ResolvedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId");
+
+                    b.HasIndex("ReporterUserId");
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.ToTable("EventReports");
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.InAppNotification", b =>
                 {
                     b.Property<Guid>("Id")
@@ -314,6 +368,12 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("RelatedCaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RelatedEventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RelatedOrderId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Title")
@@ -354,6 +414,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -499,6 +562,47 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.ToTable("OrganizerProfiles");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.PaidSalesActivation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ActivatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("FeeAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<DateTimeOffset?>("FeePaidAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsSimulated")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("OrganizerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("TermsAcceptedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizerId");
+
+                    b.ToTable("PaidSalesActivations");
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.Payment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -530,6 +634,37 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasFilter("\"Status\" = 'Succeeded'");
 
                     b.ToTable("Payments");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.PlatformSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("ActivationFeeKzt")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<decimal>("ProcessingFeeFixedKzt")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<decimal>("ProcessingFeePercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PlatformSettings", t =>
+                        {
+                            t.HasCheckConstraint("CK_PlatformSettings_Values", "\"ActivationFeeKzt\" >= 0 AND \"ProcessingFeePercent\" >= 0 AND \"ProcessingFeePercent\" <= 50 AND \"ProcessingFeeFixedKzt\" >= 0");
+                        });
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.PromoCampaign", b =>
@@ -616,6 +751,47 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.ToTable("PromoCampaignTicketTypes");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.Refund", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("InitiatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsSimulated")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("EventId", "CreatedAt");
+
+                    b.ToTable("Refunds", t =>
+                        {
+                            t.HasCheckConstraint("CK_Refunds_Amount", "\"Amount\" >= 0");
+                        });
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.Seat", b =>
                 {
                     b.Property<Guid>("Id")
@@ -696,6 +872,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Property<Guid?>("EventId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("IsEscalated")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid?>("OrderId")
                         .HasColumnType("uuid");
 
@@ -732,6 +911,8 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.HasIndex("OrderId");
 
                     b.HasIndex("TicketId");
+
+                    b.HasIndex("IsEscalated", "Status");
 
                     b.HasIndex("RequesterUserId", "UpdatedAt");
 
@@ -1035,6 +1216,25 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.EventReport", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.AppUser", "Reporter")
+                        .WithMany()
+                        .HasForeignKey("ReporterUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Event");
+
+                    b.Navigation("Reporter");
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.InAppNotification", b =>
                 {
                     b.HasOne("BiletFlow.Api.Models.AppUser", "User")
@@ -1109,6 +1309,23 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.PaidSalesActivation", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("BiletFlow.Api.Models.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Event");
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.Payment", b =>
                 {
                     b.HasOne("BiletFlow.Api.Models.Order", "Order")
@@ -1156,6 +1373,17 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Navigation("Campaign");
 
                     b.Navigation("TicketType");
+                });
+
+            modelBuilder.Entity("BiletFlow.Api.Models.Refund", b =>
+                {
+                    b.HasOne("BiletFlow.Api.Models.Order", "Order")
+                        .WithMany("Refunds")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Order");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.Seat", b =>
@@ -1365,6 +1593,8 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.Navigation("Items");
 
                     b.Navigation("Payments");
+
+                    b.Navigation("Refunds");
                 });
 
             modelBuilder.Entity("BiletFlow.Api.Models.OrderItem", b =>

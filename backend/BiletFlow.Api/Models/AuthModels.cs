@@ -17,7 +17,13 @@ public enum AuditActionType
     OrderCreated, OrderUpdated, PaymentSucceeded, PaymentFailed, OrderCancelled, OrderExpired,
     EventCancelled, PaidSalesActivated, PaidSalesSuspended, PromoCampaignCreated, PromoCampaignUpdated,
     PromoCampaignDisabled, EventAdminAssigned, TicketCheckedIn, TicketCheckInReversed, SupportCaseCreated, SupportCaseAssigned,
-    SupportCaseStatusChanged, SupportMessageCreated
+    SupportCaseStatusChanged, SupportMessageCreated,
+    EventCreated, EventUpdated, EventPublished, EventUnpublished, EventDuplicated, EventDeleted,
+    EventSuspended, EventReinstated, EventReported, EventReportResolved,
+    TicketTypeCreated, TicketTypeUpdated, TicketTypeDeleted,
+    OrderRefunded, ActivationFeePaid, PaidSalesTermsAccepted, OrganizerVerified, PaidSalesReinstated,
+    PromoCampaignDeleted, EventAdminUnassigned, SupportCaseEscalated, SeatingConfigured,
+    UserSuspended, UserReinstated, UserRoleChanged, PlatformSettingsUpdated
 }
 
 public sealed class AppUser
@@ -98,6 +104,8 @@ public sealed class Event
     public DateTimeOffset? RegistrationOpensAt { get; set; }
     public DateTimeOffset? RegistrationClosesAt { get; set; }
     public bool IsCancelled { get; set; }
+    /// <summary>Set by a platform administrator; a suspended event is hidden and cannot sell tickets.</summary>
+    public bool IsSuspended { get; set; }
     /// <summary>Maximum number of tickets for the whole event; null means unlimited.</summary>
     public int? Capacity { get; set; }
     public int TicketsIssued { get; set; }
@@ -107,12 +115,18 @@ public sealed class Event
     public bool PaidTermsAccepted { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
+    /// <summary>Upcoming, Active, Completed or Cancelled, derived from the dates (SRS 4.16).</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public string LifecycleStatus => GetLifecycleStatus(DateTimeOffset.UtcNow);
     [JsonIgnore]
     public ICollection<TicketType> TicketTypes { get; set; } = new List<TicketType>();
     [JsonIgnore]
     public ICollection<Order> Orders { get; set; } = new List<Order>();
     [JsonIgnore]
     public ICollection<PromoCampaign> PromoCampaigns { get; set; } = new List<PromoCampaign>();
+
+    public string GetLifecycleStatus(DateTimeOffset now) =>
+        IsCancelled ? "Cancelled" : EndDateUtc <= now ? "Completed" : StartDateUtc <= now ? "Active" : "Upcoming";
 }
 
 public sealed class TicketType
@@ -152,10 +166,14 @@ public sealed class Order
     public decimal FeeTotal { get; set; }
     public decimal Total { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>When the order became Confirmed (free checkout or successful payment); used for sales-over-time analytics.</summary>
+    public DateTimeOffset? ConfirmedAt { get; set; }
     [JsonIgnore]
     public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
     [JsonIgnore]
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
+    [JsonIgnore]
+    public ICollection<Refund> Refunds { get; set; } = new List<Refund>();
     public Guid? PromoCampaignId { get; set; }
     [JsonIgnore]
     public PromoCampaign? PromoCampaign { get; set; }
@@ -309,6 +327,8 @@ public sealed class SupportCase
     public Guid? AssignedToUserId { get; set; }
     [JsonIgnore]
     public AppUser? AssignedToUser { get; set; }
+    /// <summary>An attendee case raised to platform administrators by the requester or the organizer.</summary>
+    public bool IsEscalated { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     [JsonIgnore]
@@ -338,6 +358,8 @@ public sealed class InAppNotification
     public required string Title { get; set; }
     public required string Message { get; set; }
     public Guid? RelatedCaseId { get; set; }
+    public Guid? RelatedEventId { get; set; }
+    public Guid? RelatedOrderId { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ReadAt { get; set; }
 }

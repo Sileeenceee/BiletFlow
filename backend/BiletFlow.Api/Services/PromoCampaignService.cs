@@ -133,6 +133,8 @@ public sealed class PromoCampaignService(
         }
 
         db.PromoCampaigns.Remove(campaign);
+        audit.Add(AuditActionType.PromoCampaignDeleted, nameof(PromoCampaign), campaign.Id, eventId, userId,
+            $"Unused promo campaign '{campaign.Code}' deleted.");
         await db.SaveChangesAsync();
         return (true, null);
     }
@@ -143,7 +145,7 @@ public sealed class PromoCampaignService(
             .Include(candidate => candidate.Event)
             .SingleOrDefaultAsync(candidate => candidate.CampaignToken == token);
         if (campaign is null || !IsAvailable(campaign, DateTimeOffset.UtcNow) ||
-            !campaign.Event.IsPublished || campaign.Event.IsCancelled ||
+            !campaign.Event.IsPublished || campaign.Event.IsCancelled || campaign.Event.IsSuspended ||
             campaign.Event.Visibility == EventVisibility.Private)
         {
             return (null, "This promo campaign is invalid, expired, or disabled.");
@@ -176,24 +178,36 @@ public sealed class PromoCampaignService(
         return new PngByteQRCode(data).GetGraphic(8);
     }
 
-    public async Task<PromoCampaign?> FindApplicableCampaignAsync(
+    /// <summary>
+    /// Validates a promo code or campaign token for a checkout on the server. Returns the campaign, or a specific
+    /// reason (unknown, not yet valid, expired, disabled, exhausted or inapplicable) when it cannot be applied.
+    /// Runs inside the checkout's serializable transaction, so the redemption limit is enforced atomically.
+    /// </summary>
+    public async Task<(PromoCampaign? Campaign, string? Error)> FindApplicableCampaignAsync(
         Guid eventId, string? code, string? token, IReadOnlyCollection<Guid> selectedTicketTypeIds,
         Guid? currentOrderId, DateTimeOffset now)
     {
-        if (!string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(token)) return null;
-        if (string.IsNullOrWhiteSpace(code) && string.IsNullOrWhiteSpace(token)) return null;
+        var hasCode = !string.IsNullOrWhiteSpace(code);
+        var hasToken = !string.IsNullOrWhiteSpace(token);
+        if (!hasCode && !hasToken) return (null, null);
+        if (hasCode && hasToken) return (null, "Provide either a promo code or a campaign link, not both.");
 
         var campaigns = db.PromoCampaigns
             .Include(candidate => candidate.ApplicableTicketTypes)
             .Where(candidate => candidate.EventId == eventId);
-        var campaign = !string.IsNullOrWhiteSpace(token)
+        var campaign = hasToken
             ? await campaigns.SingleOrDefaultAsync(candidate => candidate.CampaignToken == token)
             : await campaigns.SingleOrDefaultAsync(candidate => candidate.Code == NormalizeCode(code!));
-        if (campaign is null || !IsAvailable(campaign, now)) return null;
+        if (campaign is null) return (null, "This promo code does not exist for this event.");
+        if (!campaign.IsEnabled) return (null, $"Promo code {campaign.Code} has been disabled.");
+        if (campaign.StartsAt is not null && campaign.StartsAt > now) return (null, $"Promo code {campaign.Code} is not valid yet.");
+        if (campaign.EndsAt is not null && campaign.EndsAt <= now) return (null, $"Promo code {campaign.Code} has expired.");
 
-        var selectedIds = selectedTicketTypeIds.ToHashSet();
         var applicableIds = campaign.ApplicableTicketTypes.Select(row => row.TicketTypeId).ToHashSet();
-        if (applicableIds.Count > 0 && !selectedIds.Any(applicableIds.Contains)) return null;
+        if (applicableIds.Count > 0 && !selectedTicketTypeIds.Any(applicableIds.Contains))
+        {
+            return (null, $"Promo code {campaign.Code} does not apply to the selected tickets.");
+        }
 
         if (campaign.MaxRedemptions is not null)
         {
@@ -202,10 +216,13 @@ public sealed class PromoCampaignService(
                 (order.Status == OrderStatus.Confirmed ||
                  (order.Status == OrderStatus.Pending && order.CreatedAt > now - TicketingService.ReservationTime)) &&
                 order.Id != currentOrderId);
-            if (redemptionCount >= campaign.MaxRedemptions) return null;
+            if (redemptionCount >= campaign.MaxRedemptions)
+            {
+                return (null, $"Promo code {campaign.Code} has reached its redemption limit.");
+            }
         }
 
-        return campaign;
+        return (campaign, null);
     }
 
     public async Task<decimal?> ApplyDiscountAsync(

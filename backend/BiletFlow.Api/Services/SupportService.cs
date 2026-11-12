@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BiletFlow.Api.Services;
 
-public sealed class SupportService(AuthDbContext db, AuditService audit)
+public sealed class SupportService(AuthDbContext db, AuditService audit, NotificationService notifications)
 {
     private static readonly HashSet<string> AttendeeCategories = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -23,7 +23,8 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
         if (user is null || user.IsSuspended) return (null, "User not found.");
         var type = user.Role switch
         {
-            UserRole.Attendee => SupportCaseType.Attendee,
+            // Event staff buy tickets as attendees too.
+            UserRole.Attendee or UserRole.EventAdmin => SupportCaseType.Attendee,
             UserRole.Organizer => SupportCaseType.Organizer,
             _ => (SupportCaseType?)null
         };
@@ -64,15 +65,24 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
         audit.Add(AuditActionType.SupportCaseCreated, nameof(SupportCase), supportCase.Id, eventId, userId,
             $"Support case '{supportCase.Subject}' opened.");
         await NotifyStaffAsync(supportCase, userId, "New support case", $"A new support case was opened: {supportCase.Subject}");
+        await FlushNotificationsAsync();
         await db.SaveChangesAsync();
         await db.Entry(supportCase).Collection(candidate => candidate.Messages).Query()
             .Include(message => message.Sender).LoadAsync();
         return (ToResponse(supportCase), null);
     }
 
-    public async Task<IReadOnlyList<SupportCaseResponse>> GetCasesAsync(Guid userId, bool isPlatformAdmin)
+    public async Task<IReadOnlyList<SupportCaseResponse>> GetCasesAsync(
+        Guid userId, bool isPlatformAdmin, Guid? eventId = null, string? status = null, bool? escalated = null)
     {
         var query = AccessibleCasesQuery(userId, isPlatformAdmin);
+        if (eventId is not null) query = query.Where(supportCase => supportCase.EventId == eventId);
+        if (escalated is not null) query = query.Where(supportCase => supportCase.IsEscalated == escalated);
+        if (!string.IsNullOrWhiteSpace(status) && TryParseStatus(status, out var parsedStatus))
+        {
+            query = query.Where(supportCase => supportCase.Status == parsedStatus);
+        }
+
         var cases = await query.Include(supportCase => supportCase.Messages)
             .ThenInclude(message => message.Sender)
             .OrderByDescending(supportCase => supportCase.UpdatedAt)
@@ -118,10 +128,44 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
         await NotifyOtherParticipantsAsync(supportCase, userId, "New support reply", $"New reply in support case: {supportCase.Subject}");
         audit.Add(AuditActionType.SupportMessageCreated, nameof(SupportMessage), message.Id,
             supportCase.EventId, userId, $"Reply added to support case '{supportCase.Subject}'.");
+        await FlushNotificationsAsync();
         await db.SaveChangesAsync();
 
         message.Sender = await db.Users.SingleAsync(candidate => candidate.Id == userId);
         supportCase.Messages.Add(message);
+        return (ToResponse(supportCase), null);
+    }
+
+    /// <summary>
+    /// Escalates an attendee case to platform administrators, for example a payment dispute the organizer cannot solve.
+    /// The requester or the organizer staff of the case may escalate it.
+    /// </summary>
+    public async Task<(SupportCaseResponse? Case, string? Error)> EscalateAsync(Guid caseId, Guid userId, bool isPlatformAdmin, string? reason)
+    {
+        var supportCase = await AccessibleCasesQuery(userId, isPlatformAdmin)
+            .Include(candidate => candidate.Messages)
+            .ThenInclude(message => message.Sender)
+            .SingleOrDefaultAsync(candidate => candidate.Id == caseId);
+        if (supportCase is null) return (null, "Support case not found.");
+        if (supportCase.Type != SupportCaseType.Attendee) return (null, "Organizer cases are already handled by platform administrators.");
+        if (supportCase.Status == SupportCaseStatus.Resolved) return (null, "A resolved case cannot be escalated.");
+        if (supportCase.IsEscalated) return (ToResponse(supportCase), null);
+
+        supportCase.IsEscalated = true;
+        supportCase.UpdatedAt = DateTimeOffset.UtcNow;
+        if (!string.IsNullOrWhiteSpace(reason))
+        {
+            var message = new SupportMessage { CaseId = supportCase.Id, SenderUserId = userId, Body = $"Escalated to platform support: {reason.Trim()}" };
+            db.SupportMessages.Add(message);
+            message.Sender = await db.Users.SingleAsync(candidate => candidate.Id == userId);
+            supportCase.Messages.Add(message);
+        }
+
+        audit.Add(AuditActionType.SupportCaseEscalated, nameof(SupportCase), supportCase.Id, supportCase.EventId, userId,
+            $"Support case '{supportCase.Subject}' escalated to platform administrators.");
+        await notifications.NotifyPlatformAdminsAsync("Support", "Support case escalated",
+            $"Support case escalated: {supportCase.Subject}", supportCase.EventId, supportCase.Id, userId);
+        await db.SaveChangesAsync();
         return (ToResponse(supportCase), null);
     }
 
@@ -171,6 +215,13 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
             supportCase.EventId, staffUserId, $"Support case status changed to {FormatStatus(supportCase.Status)}.");
         AddNotification(supportCase.RequesterUserId, supportCase.Id, "Support status changed",
             $"Your support case status is now {FormatStatus(supportCase.Status)}.", staffUserId);
+        if (request.AssignedToUserId is not null && !request.ClearAssignment)
+        {
+            AddNotification(request.AssignedToUserId.Value, supportCase.Id, "Support case assigned to you",
+                $"You were assigned the support case: {supportCase.Subject}", staffUserId);
+        }
+
+        await FlushNotificationsAsync();
         await db.SaveChangesAsync();
         return (ToResponse(supportCase), null);
     }
@@ -301,14 +352,21 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
     private void AddNotification(Guid userId, Guid caseId, string title, string message, Guid senderId)
     {
         if (userId == senderId) return;
-        db.InAppNotifications.Add(new InAppNotification
+        pendingNotifications.Add((userId, caseId, title, message));
+    }
+
+    private readonly List<(Guid UserId, Guid CaseId, string Title, string Message)> pendingNotifications = [];
+
+    /// <summary>Turns the collected support notifications into in-app notifications plus emails (SRS 4.13).</summary>
+    private async Task FlushNotificationsAsync()
+    {
+        foreach (var (userId, caseId, title, message) in pendingNotifications)
         {
-            UserId = userId,
-            RelatedCaseId = caseId,
-            Type = "Support",
-            Title = title,
-            Message = message.Length > 500 ? message[..500] : message
-        });
+            await notifications.NotifyUserAsync(userId, "Support", title, message, caseId: caseId,
+                emailBody: $"{message}\nOpen the conversation: {notifications.AppUrl($"/support?caseId={caseId}")}");
+        }
+
+        pendingNotifications.Clear();
     }
 
     private static SupportCaseResponse ToResponse(SupportCase supportCase) =>
@@ -319,7 +377,8 @@ public sealed class SupportService(AuthDbContext db, AuditService audit)
             supportCase.Messages.OrderBy(message => message.CreatedAt)
                 .Select(message => new SupportMessageResponse(message.Id, message.SenderUserId,
                     message.Sender.Role.ToString(), message.Body, message.CreatedAt))
-                .ToList());
+                .ToList(),
+            supportCase.IsEscalated);
 
     private static bool TryParseStatus(string value, out SupportCaseStatus status)
     {

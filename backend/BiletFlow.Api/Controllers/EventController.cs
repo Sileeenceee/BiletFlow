@@ -13,17 +13,19 @@ public sealed class EventController(EventService eventService) : ControllerBase
 {
     [AllowAnonymous]
     [HttpGet]
-    public async Task<IActionResult> GetPublishedEvents() =>
-        Ok(await eventService.GetPublishedEventsAsync());
+    public async Task<IActionResult> GetPublishedEvents(
+        [FromQuery] string? search, [FromQuery] string? city, [FromQuery] string? category) =>
+        Ok(await eventService.GetPublishedEventsAsync(search, city, category));
 
     [HttpGet("me")]
-    public async Task<IActionResult> GetMyEvents()
+    /// <param name="status">Optional lifecycle filter: Upcoming, Active, Completed or Cancelled.</param>
+    public async Task<IActionResult> GetMyEvents([FromQuery] string? status)
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
 
-        var events = await eventService.GetOrganizerEventsAsync(userId.Value);
-        return Ok(events);
+        var result = await eventService.GetOrganizerEventsAsync(userId.Value, status);
+        return result.Events is null ? BadRequest(new { error = result.Error }) : Ok(result.Events);
     }
 
     [AllowAnonymous]

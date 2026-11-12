@@ -12,11 +12,25 @@ namespace BiletFlow.Api.Controllers;
 public sealed class SupportController(SupportService support) : ControllerBase
 {
     [HttpGet("cases")]
-    public async Task<IActionResult> GetCases()
+    public async Task<IActionResult> GetCases([FromQuery] Guid? eventId, [FromQuery] string? status, [FromQuery] bool? escalated)
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
-        return Ok(await support.GetCasesAsync(userId.Value, IsPlatformAdmin()));
+        return Ok(await support.GetCasesAsync(userId.Value, IsPlatformAdmin(), eventId, status, escalated));
+    }
+
+    [HttpPost("cases/{caseId:guid}/escalate")]
+    public async Task<IActionResult> Escalate(Guid caseId, [FromBody] AdminReasonRequest? request)
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+        var result = await support.EscalateAsync(caseId, userId.Value, IsPlatformAdmin(), request?.Reason);
+        if (result.Case is null)
+        {
+            return result.Error == "Support case not found." ? NotFound(new { error = result.Error }) : BadRequest(new { error = result.Error });
+        }
+
+        return Ok(result.Case);
     }
 
     [HttpPost("cases")]

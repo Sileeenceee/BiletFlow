@@ -10,7 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace BiletFlow.Api.Services;
 
-public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passwordHasher, IConfiguration configuration, IHostEnvironment environment)
+public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passwordHasher, IConfiguration configuration, IHostEnvironment environment, NotificationService notifications)
 {
     private const int TokenLifetimeMinutes = 60;
     private const int RefreshTokenLifetimeDays = 7;
@@ -21,7 +21,14 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
         if (!IsValidEmail(email) || !IsValidPassword(request.Password)) return (null, null, "A valid email and a password of at least 8 characters are required.");
         if (await db.Users.AnyAsync(user => user.Email == email)) return (null, null, "An account with this email already exists.");
 
-        var user = new AppUser { Email = email, PasswordHash = string.Empty, Role = request.CreateOrganizerProfile ? UserRole.Organizer : UserRole.Attendee };
+        if (request.FullName?.Trim().Length > 200) return (null, null, "Full name must be at most 200 characters.");
+        var user = new AppUser
+        {
+            Email = email,
+            PasswordHash = string.Empty,
+            FullName = request.FullName?.Trim() ?? string.Empty,
+            Role = request.CreateOrganizerProfile ? UserRole.Organizer : UserRole.Attendee
+        };
         user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
         db.Users.Add(user);
         var rawToken = CreateRawToken();
@@ -38,9 +45,30 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
             });
         }
 
+        SendVerificationEmail(email, rawToken);
         await db.SaveChangesAsync();
         return (user, rawToken, null);
     }
+
+    /// <summary>Issues a new verification token; answers the same way whether or not the account exists.</summary>
+    public async Task<string?> ResendVerificationAsync(string email)
+    {
+        var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Email == NormalizeEmail(email));
+        if (user is null || user.IsSuspended || user.EmailConfirmed) return null;
+        await db.AuthTokens
+            .Where(token => token.UserId == user.Id && token.Type == AuthTokenType.EmailVerification && token.UsedAt == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
+        var rawToken = CreateRawToken();
+        db.AuthTokens.Add(CreateToken(user.Id, AuthTokenType.EmailVerification, rawToken, TimeSpan.FromHours(24)));
+        SendVerificationEmail(user.Email, rawToken);
+        await db.SaveChangesAsync();
+        return rawToken;
+    }
+
+    private void SendVerificationEmail(string email, string rawToken) =>
+        notifications.QueueEmail(email, "Verify your BiletFlow email address",
+            $"Welcome to BiletFlow!\n\nConfirm your email address within 24 hours:\n" +
+            notifications.AppUrl($"/verify-email?token={Uri.EscapeDataString(rawToken)}"));
 
     public async Task<(AuthResponse? Response, string? Error)> LoginAsync(LoginRequest request)
     {
@@ -66,6 +94,10 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
         if (user is null || user.IsSuspended) return null;
         var rawToken = CreateRawToken();
         db.AuthTokens.Add(CreateToken(user.Id, AuthTokenType.PasswordReset, rawToken, TimeSpan.FromMinutes(30)));
+        notifications.QueueEmail(user.Email, "Reset your BiletFlow password",
+            "Use this link within 30 minutes to choose a new password:\n" +
+            notifications.AppUrl($"/reset-password?token={Uri.EscapeDataString(rawToken)}") +
+            "\n\nIf you did not ask for this, you can ignore this email.");
         await db.SaveChangesAsync();
         return rawToken;
     }
@@ -171,6 +203,7 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
                 .ExecuteUpdateAsync(set => set.SetProperty(token => token.UsedAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
             verificationToken = CreateRawToken();
             db.AuthTokens.Add(CreateToken(userId, AuthTokenType.EmailVerification, verificationToken, TimeSpan.FromHours(24)));
+            SendVerificationEmail(user.Email, verificationToken);
         }
 
         if (emailChanged || passwordChanged) await RevokeRefreshTokensAsync(userId);

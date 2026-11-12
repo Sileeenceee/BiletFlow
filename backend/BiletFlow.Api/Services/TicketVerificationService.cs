@@ -96,7 +96,7 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
             user.Role = UserRole.Attendee;
         }
 
-        audit.Add(AuditActionType.EventAdminAssigned, nameof(EventAdminAssignment), assignment.Id, eventId,
+        audit.Add(AuditActionType.EventAdminUnassigned, nameof(EventAdminAssignment), assignment.Id, eventId,
             organizerId, "Event administrator unassigned.");
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
@@ -116,7 +116,7 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
     }
 
     public async Task<TicketVerificationResponse> ValidateByCodeAsync(
-        string ticketCode, Guid userId, bool isPlatformAdmin)
+        string ticketCode, Guid userId, bool isPlatformAdmin, Guid? selectedEventId = null)
     {
         if (!IsAdmissionCode(ticketCode))
         {
@@ -129,12 +129,16 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
         {
             return Invalid("You are not assigned to this event.");
         }
+        if (selectedEventId is not null && ticket.EventId != selectedEventId)
+        {
+            return Invalid($"This ticket is for a different event ({ticket.Event.Title}).");
+        }
 
         return await GetTicketStatusAsync(ticket);
     }
 
     public async Task<TicketVerificationResponse> CheckInAsync(
-        string ticketCode, Guid userId, bool isPlatformAdmin)
+        string ticketCode, Guid userId, bool isPlatformAdmin, Guid? selectedEventId = null)
     {
         if (!IsAdmissionCode(ticketCode))
         {
@@ -147,6 +151,10 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
         if (!await CanVerifyEventAsync(ticket.EventId, userId, isPlatformAdmin))
         {
             return Invalid("You are not assigned to this event.");
+        }
+        if (selectedEventId is not null && ticket.EventId != selectedEventId)
+        {
+            return Invalid($"This ticket is for a different event ({ticket.Event.Title}).");
         }
 
         var status = await GetTicketStatusAsync(ticket);
@@ -173,12 +181,12 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
         {
             return new TicketVerificationResponse("AlreadyUsed", "Ticket was checked in by another staff member.", ticket.Id,
                 ticket.Event.Title, ticket.OrderItem.TicketTypeName, ticket.AttendeeName, ticket.AttendeeEmail,
-                TicketStatus.CheckedIn.ToString(), null);
+                TicketStatus.CheckedIn.ToString(), null, SeatLabel(ticket));
         }
 
         return new TicketVerificationResponse("CheckedIn", "Ticket checked in successfully.", ticket.Id,
             ticket.Event.Title, ticket.OrderItem.TicketTypeName, ticket.AttendeeName, ticket.AttendeeEmail,
-            ticket.Status.ToString(), checkIn.CheckedInAt);
+            ticket.Status.ToString(), checkIn.CheckedInAt, SeatLabel(ticket));
     }
 
     public async Task<bool> ReverseCheckInAsync(Guid ticketId, Guid userId, bool isPlatformAdmin)
@@ -252,17 +260,26 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
 
     private Task<Ticket?> LoadTicketAsync(Guid ticketId) => db.Tickets
         .Include(ticket => ticket.Event)
+        .Include(ticket => ticket.Seat).ThenInclude(seat => seat!.Section)
         .Include(ticket => ticket.OrderItem)
         .SingleOrDefaultAsync(ticket => ticket.Id == ticketId);
 
     private Task<Ticket?> LoadTicketByCodeAsync(string code) => db.Tickets
         .Include(ticket => ticket.Event)
+        .Include(ticket => ticket.Seat).ThenInclude(seat => seat!.Section)
         .Include(ticket => ticket.OrderItem)
         .SingleOrDefaultAsync(ticket => ticket.Code == code.Trim());
 
-    private static bool IsAdmissionCode(string code) =>
-        code.StartsWith("TKT_", StringComparison.Ordinal) ||
-        (code.Length == 43 && !code.StartsWith("CMP_", StringComparison.Ordinal));
+    /// <summary>Only ticket codes are admission codes; Campaign QR links (URLs with CMP_ tokens) are always rejected.</summary>
+    private static bool IsAdmissionCode(string code)
+    {
+        var trimmed = code.Trim();
+        if (trimmed.Contains("CMP_", StringComparison.Ordinal) || trimmed.Contains('/') || trimmed.Contains(':')) return false;
+        // Legacy codes without the TKT_ prefix are 43-character base64url strings.
+        return (trimmed.StartsWith("TKT_", StringComparison.Ordinal) && trimmed.Length <= 64) || trimmed.Length == 43;
+    }
+
+    private static string? SeatLabel(Ticket ticket) => ticket.Seat is null ? null : SeatingService.Label(ticket.Seat);
 
     private async Task<bool> CanVerifyEventAsync(Guid eventId, Guid userId, bool isPlatformAdmin)
     {
@@ -301,7 +318,7 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
             : null;
         return new TicketVerificationResponse(result, message, ticket.Id, ticket.Event.Title,
             ticket.OrderItem.TicketTypeName, ticket.AttendeeName, ticket.AttendeeEmail,
-            ticket.Status.ToString(), checkedInAt);
+            ticket.Status.ToString(), checkedInAt, SeatLabel(ticket));
     }
 
     private static TicketVerificationResponse Invalid(string message) =>

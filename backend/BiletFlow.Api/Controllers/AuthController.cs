@@ -53,6 +53,17 @@ public sealed class AuthController(AuthService service) : ControllerBase
             ? Ok(new { message = "Email verified." })
             : BadRequest(new { error = "The verification token is invalid or expired." });
 
+    [HttpPost("resend-verification")]
+    public async Task<IActionResult> ResendVerification(ResendVerificationRequest request)
+    {
+        var token = await service.ResendVerificationAsync(request.Email);
+        return Ok(new
+        {
+            message = "If the account exists and is not verified yet, a new verification email has been sent.",
+            VerificationToken = service.IsDevelopment ? token : null
+        });
+    }
+
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest request)
     {
@@ -85,6 +96,7 @@ public sealed class AuthController(AuthService service) : ControllerBase
         {
             UserId = user.Id,
             user.Email,
+            user.FullName,
             Role = user.Role.ToString(),
             user.EmailConfirmed
         });
