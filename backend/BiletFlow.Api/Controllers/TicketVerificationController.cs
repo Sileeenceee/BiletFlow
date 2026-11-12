@@ -63,7 +63,7 @@ public sealed class TicketVerificationController(TicketVerificationService verif
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
-        var result = await verification.ValidateByCodeAsync(request.TicketCode, userId.Value, IsPlatformAdmin());
+        var result = await verification.ValidateByCodeAsync(request.TicketCode, userId.Value, IsPlatformAdmin(), request.EventId);
         return result.Result == "Invalid" ? BadRequest(result) : Ok(result);
     }
 
@@ -72,7 +72,7 @@ public sealed class TicketVerificationController(TicketVerificationService verif
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
-        var result = await verification.CheckInAsync(request.TicketCode, userId.Value, IsPlatformAdmin());
+        var result = await verification.CheckInAsync(request.TicketCode, userId.Value, IsPlatformAdmin(), request.EventId);
         return result.Result switch
         {
             "Invalid" => BadRequest(result),

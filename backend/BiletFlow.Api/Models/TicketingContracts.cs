@@ -70,8 +70,13 @@ public sealed record CheckoutRequest
     [Required, EmailAddress, MaxLength(320)]
     public required string AttendeeEmail { get; init; }
 
-    [Required, MinLength(1), MaxLength(10)]
-    public required IReadOnlyList<CheckoutItemRequest> Items { get; init; }
+    /// <summary>Ticket types and quantities for general-admission events.</summary>
+    [MaxLength(10)]
+    public IReadOnlyList<CheckoutItemRequest> Items { get; init; } = [];
+
+    /// <summary>Chosen seats for assigned-seating events; the ticket type of each seat comes from its section.</summary>
+    [MaxLength(10)]
+    public IReadOnlyList<Guid>? SeatIds { get; init; }
     [MaxLength(40)]
     public string? PromoCode { get; init; }
     [MaxLength(64)]
@@ -121,7 +126,10 @@ public sealed record TicketResponse(
     string AttendeeName,
     string AttendeeEmail,
     string TicketTypeName,
-    string? QrCodeDataUri);
+    string? QrCodeDataUri,
+    string? SectionName = null,
+    string? RowLabel = null,
+    string? SeatNumber = null);
 
 /// <summary>Order line containing its issued tickets.</summary>
 public sealed record OrderItemResponse(
@@ -145,7 +153,10 @@ public sealed record OrderResponse(
     decimal FeeTotal = 0,
     DateTimeOffset? ExpiresAt = null,
     string? PaymentStatus = null,
-    string? PromoCode = null);
+    string? PromoCode = null,
+    decimal RefundTotal = 0,
+    DateTimeOffset? ConfirmedAt = null,
+    bool IsSimulated = true);
 
 /// <summary>Request to pay a pending order in the payment simulation.</summary>
 public sealed record PayOrderRequest
@@ -171,6 +182,9 @@ public sealed record ActivatePaidSalesSimulationRequest
 {
     [Required]
     public bool ConfirmSimulationOnly { get; init; }
+
+    /// <summary>Accepting the paid-event terms is part of activation; the existing one-step flow accepts them.</summary>
+    public bool AcceptTerms { get; init; } = true;
 }
 
 public sealed record CreatePromoCampaignRequest
@@ -215,13 +229,17 @@ public sealed record EventAdminResponse(Guid UserId, string Email, DateTimeOffse
 
 public sealed record TicketVerificationRequest
 {
-    [Required, MaxLength(64)]
+    [Required, MaxLength(512)]
     public required string TicketCode { get; init; }
+
+    /// <summary>The event selected in the scanner; a ticket of another event is rejected.</summary>
+    public Guid? EventId { get; init; }
 }
 
 public sealed record TicketVerificationResponse(
     string Result, string Message, Guid? TicketId, string? EventTitle, string? TicketTypeName,
-    string? AttendeeName, string? AttendeeEmail, string? TicketStatus, DateTimeOffset? CheckedInAt);
+    string? AttendeeName, string? AttendeeEmail, string? TicketStatus, DateTimeOffset? CheckedInAt,
+    string? SeatLabel = null);
 
 public sealed record CheckInSummaryResponse(
     Guid EventId, int Registered, int CheckedIn, int Remaining, decimal CheckInPercentage);
@@ -255,10 +273,11 @@ public sealed record UpdateSupportCaseRequest
 
 public sealed record InAppNotificationResponse(
     Guid Id, string Type, string Title, string Message, Guid? RelatedCaseId,
-    DateTimeOffset CreatedAt, DateTimeOffset? ReadAt);
+    DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, Guid? RelatedEventId = null, Guid? RelatedOrderId = null);
 
 public sealed record SupportMessageResponse(Guid Id, Guid SenderUserId, string SenderRole, string Body, DateTimeOffset CreatedAt);
 public sealed record SupportCaseResponse(
     Guid Id, string Type, string Category, string Subject, string Status, Guid RequesterUserId,
     Guid? EventId, Guid? OrderId, Guid? TicketId, Guid? AssignedToUserId,
-    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<SupportMessageResponse> Messages);
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, IReadOnlyList<SupportMessageResponse> Messages,
+    bool IsEscalated = false);

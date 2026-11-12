@@ -26,10 +26,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=biletflow;Username=biletflow;Password=biletflow123
       PublicAppBaseUrl: http://localhost:8080
+      Email__SmtpHost: mailpit
+      Email__SmtpPort: "1025"
+      Email__From: "BiletFlow <no-reply@biletflow.local>"
       ASPNETCORE_URLS: http://+:6767;https://+:6969
       ASPNETCORE_Kestrel__Certificates__Default__Path: /https/devcert.pfx
       ASPNETCORE_Kestrel__Certificates__Default__Password: changeit
@@ -48,12 +53,21 @@ services:
         - -c
         - |
           exec 3<>/dev/tcp/127.0.0.1/6767
-          printf 'GET /swagger/index.html HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
           IFS= read -r status <&3
           [[ "$$status" == *" 200 OK"* ]]
       interval: 15s
       timeout: 5s
       retries: 10
+
+  mailpit:
+    # Local SMTP inbox for demonstration emails (verification, tickets, refunds, support). Web UI: http://localhost:8025
+    image: axllent/mailpit:v1.21
+    container_name: biletflow-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
 
   frontend:
     build:

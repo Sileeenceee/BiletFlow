@@ -2,7 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace BiletFlow.Api.Models;
 
-public sealed record RegisterRequest(string Email, string Password, bool CreateOrganizerProfile = false);
+public sealed record RegisterRequest(string Email, string Password, bool CreateOrganizerProfile = false, string? FullName = null);
+public sealed record ResendVerificationRequest(string Email);
 public sealed record UpdateAccountRequest(string CurrentPassword, string? Email = null, string? NewPassword = null);
 public sealed record LoginRequest(string Email, string Password);
 public sealed record VerifyEmailRequest(string Token);
@@ -28,7 +29,10 @@ public sealed record CreateEventRequest(
     [property: JsonConverter(typeof(JsonStringEnumConverter))]
     EventVisibility Visibility = EventVisibility.Public,
     DateTimeOffset? RegistrationOpensAt = null,
-    DateTimeOffset? RegistrationClosesAt = null);
+    DateTimeOffset? RegistrationClosesAt = null,
+    string? VenueAddress = null,
+    string? Timezone = null,
+    string? RefundPolicy = null);
 public sealed record RefreshRequest(string RefreshToken);
 public sealed record AuthResponse(string AccessToken, DateTimeOffset ExpiresAt, Guid UserId, string Email, string Role, bool EmailConfirmed, string RefreshToken);
 public sealed record DevelopmentTokenResponse(string? Token);

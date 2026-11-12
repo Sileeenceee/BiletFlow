@@ -25,7 +25,8 @@ public sealed class NotificationsController(AuthDbContext db) : ControllerBase
             .Take(100)
             .Select(notification => new InAppNotificationResponse(
                 notification.Id, notification.Type, notification.Title, notification.Message,
-                notification.RelatedCaseId, notification.CreatedAt, notification.ReadAt))
+                notification.RelatedCaseId, notification.CreatedAt, notification.ReadAt,
+                notification.RelatedEventId, notification.RelatedOrderId))
             .ToListAsync();
         return Ok(notifications);
     }
@@ -40,6 +41,17 @@ public sealed class NotificationsController(AuthDbContext db) : ControllerBase
         if (notification is null) return NotFound();
         notification.ReadAt ??= DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    [HttpPut("read-all")]
+    public async Task<IActionResult> MarkAllRead()
+    {
+        var userId = GetCurrentUserId();
+        if (userId is null) return Unauthorized();
+        await db.InAppNotifications
+            .Where(notification => notification.UserId == userId.Value && notification.ReadAt == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(notification => notification.ReadAt, (DateTimeOffset?)DateTimeOffset.UtcNow));
         return NoContent();
     }
 

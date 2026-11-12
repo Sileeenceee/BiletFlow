@@ -9,7 +9,7 @@ namespace BiletFlow.Api.Controllers;
 [ApiController]
 [Route("api/events/{eventId:guid}")]
 [Authorize(Policy = "OrganizerOnly")]
-public sealed class TicketTypesController(TicketingService ticketingService) : ControllerBase
+public sealed class TicketTypesController(TicketingService ticketingService, PaidSalesService paidSales) : ControllerBase
 {
     [AllowAnonymous]
     [HttpGet("ticket-types")]
@@ -88,19 +88,15 @@ public sealed class TicketTypesController(TicketingService ticketingService) : C
     {
         var userId = GetCurrentUserId();
         if (userId is null) return Unauthorized();
-        if (!request.ConfirmSimulationOnly) return BadRequest(new { error = "Confirm that this is a simulation only." });
-
-        var activated = await ticketingService.ActivatePaidSalesSimulationAsync(
-            userId.Value,
-            IsPlatformAdmin(),
-            eventId,
-            request.ConfirmSimulationOnly);
-        if (!activated)
+        var result = await paidSales.ActivateAsync(eventId, userId.Value, IsPlatformAdmin(), request);
+        if (result.Checklist is null)
         {
-            return BadRequest(new { error = "The event must exist, have at least one paid ticket type and not be suspended." });
+            return result.Kind == ServiceError.NotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
         }
 
-        return Ok(new { eventId, paidSalesActivated = true, paymentMode = "Simulation" });
+        return Ok(new { eventId, paidSalesActivated = true, paymentMode = "Simulation", checklist = result.Checklist });
     }
 
     private Guid? GetCurrentUserId()

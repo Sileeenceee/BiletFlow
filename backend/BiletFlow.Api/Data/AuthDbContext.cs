@@ -27,6 +27,10 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<Seat> Seats => Set<Seat>();
     public DbSet<TicketTypeSection> TicketTypeSections => Set<TicketTypeSection>();
     public DbSet<SeatHold> SeatHolds => Set<SeatHold>();
+    public DbSet<Refund> Refunds => Set<Refund>();
+    public DbSet<PaidSalesActivation> PaidSalesActivations => Set<PaidSalesActivation>();
+    public DbSet<PlatformSettings> PlatformSettings => Set<PlatformSettings>();
+    public DbSet<EventReport> EventReports => Set<EventReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -79,6 +83,8 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(e => e.VenueAddress).HasMaxLength(300).IsRequired();
             entity.Property(e => e.SeatingMode).HasConversion<string>().HasMaxLength(32);
             entity.Property(e => e.Timezone).HasMaxLength(64).IsRequired().HasDefaultValue("Asia/Almaty");
+            entity.Property(e => e.RefundPolicy).HasMaxLength(2000);
+            entity.HasIndex(e => new { e.OrganizerId, e.StartDateUtc });
             entity.ToTable(table =>
             {
                 table.HasCheckConstraint(
@@ -249,6 +255,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
         {
             entity.HasKey(supportCase => supportCase.Id);
             entity.HasIndex(supportCase => new { supportCase.RequesterUserId, supportCase.UpdatedAt });
+            entity.HasIndex(supportCase => new { supportCase.IsEscalated, supportCase.Status });
             entity.Property(supportCase => supportCase.Type).HasConversion<string>().HasMaxLength(24);
             entity.Property(supportCase => supportCase.Status).HasConversion<string>().HasMaxLength(32);
             entity.Property(supportCase => supportCase.Category).HasMaxLength(40).IsRequired();
@@ -336,6 +343,54 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 .HasForeignKey(hold => hold.SeatId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(hold => hold.Order).WithMany()
                 .HasForeignKey(hold => hold.OrderId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<Refund>(entity =>
+        {
+            entity.HasKey(refund => refund.Id);
+            entity.Property(refund => refund.Amount).HasPrecision(12, 2);
+            entity.Property(refund => refund.Reason).HasMaxLength(500);
+            entity.HasIndex(refund => refund.OrderId);
+            entity.HasIndex(refund => new { refund.EventId, refund.CreatedAt });
+            entity.HasOne(refund => refund.Order).WithMany(order => order.Refunds)
+                .HasForeignKey(refund => refund.OrderId).OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table => table.HasCheckConstraint("CK_Refunds_Amount", "\"Amount\" >= 0"));
+        });
+
+        modelBuilder.Entity<PaidSalesActivation>(entity =>
+        {
+            entity.HasKey(activation => activation.Id);
+            entity.HasIndex(activation => activation.EventId).IsUnique();
+            entity.Property(activation => activation.FeeAmount).HasPrecision(12, 2);
+            entity.HasOne(activation => activation.Event).WithMany()
+                .HasForeignKey(activation => activation.EventId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AppUser>().WithMany()
+                .HasForeignKey(activation => activation.OrganizerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<PlatformSettings>(entity =>
+        {
+            entity.HasKey(settings => settings.Id);
+            entity.Property(settings => settings.Id).ValueGeneratedNever();
+            entity.Property(settings => settings.ActivationFeeKzt).HasPrecision(12, 2);
+            entity.Property(settings => settings.ProcessingFeePercent).HasPrecision(5, 2);
+            entity.Property(settings => settings.ProcessingFeeFixedKzt).HasPrecision(12, 2);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_PlatformSettings_Values",
+                "\"ActivationFeeKzt\" >= 0 AND \"ProcessingFeePercent\" >= 0 AND \"ProcessingFeePercent\" <= 50 AND \"ProcessingFeeFixedKzt\" >= 0"));
+        });
+
+        modelBuilder.Entity<EventReport>(entity =>
+        {
+            entity.HasKey(report => report.Id);
+            entity.Property(report => report.Reason).HasMaxLength(120).IsRequired();
+            entity.Property(report => report.Details).HasMaxLength(2000);
+            entity.Property(report => report.ResolutionNote).HasMaxLength(1000);
+            entity.Property(report => report.Status).HasConversion<string>().HasMaxLength(24);
+            entity.HasIndex(report => new { report.Status, report.CreatedAt });
+            entity.HasOne(report => report.Event).WithMany()
+                .HasForeignKey(report => report.EventId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(report => report.Reporter).WithMany()
+                .HasForeignKey(report => report.ReporterUserId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
