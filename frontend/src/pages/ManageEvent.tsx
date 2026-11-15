@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import {
-  activatePaidSales,
   cancelFreeOrder,
   deleteCampaign,
   deleteTicketType,
@@ -22,11 +21,16 @@ import {
   type TicketType,
 } from '../api/events'
 import { apiBlob } from '../api/client'
+import { getEventRefunds, refundOrder, type Refund } from '../api/platform'
 import { assignEventStaff, getEventStaff as getStaff, removeEventStaff, type StaffAssignment } from '../api/workflows'
 import { buttonClass, inputClass } from '../components/form'
 import { formatDateTime, formatKzt, saveBlob } from '../lib/format'
+import { AnalyticsTab } from './manage/AnalyticsTab'
+import { HistoryTab } from './manage/HistoryTab'
+import { PaidSalesPanel } from './manage/PaidSalesPanel'
+import { SeatingTab } from './manage/SeatingTab'
 
-const tabs = ['Overview', 'Tickets', 'Campaigns', 'Attendees', 'Orders', 'Team'] as const
+const tabs = ['Overview', 'Tickets', 'Seating', 'Campaigns', 'Attendees', 'Orders', 'Analytics', 'History', 'Team'] as const
 type Tab = typeof tabs[number]
 
 function localDateTime(value: string | null | undefined) {
@@ -70,7 +74,8 @@ export default function ManageEvent() {
         <div>
           <Link to="/events" className="text-sm font-semibold text-indigo-700 hover:underline">← Event portfolio</Link>
           <p className="mt-4 text-sm font-semibold text-indigo-600">Organizer workspace</p>
-          <h1 className="mt-1 text-3xl font-black tracking-tight">{event.title}</h1>
+          <h1 className="mt-1 text-3xl font-black tracking-tight">{event.title}{event.lifecycleStatus && <span className="ml-3 rounded-full bg-slate-100 px-3 py-1 align-middle text-xs font-bold text-slate-600">{event.lifecycleStatus}</span>}</h1>
+          {event.isSuspended && <p role="alert" className="mt-2 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">This event was suspended by a platform administrator. It is hidden and cannot sell tickets.</p>}
           <p className="mt-2 text-sm text-slate-500">{formatDateTime(event.startDateUtc)} · {event.venue}{event.city ? `, ${event.city}` : ''}</p>
         </div>
         <Link to={`/events/${event.id}`} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Preview event</Link>
@@ -83,6 +88,9 @@ export default function ManageEvent() {
       {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
       {tab === 'Overview' && <Overview event={event} onUpdate={setEvent} onError={setError} onMessage={setMessage} />}
       {tab === 'Tickets' && <Tickets eventId={eventId} event={event} onError={setError} onMessage={setMessage} />}
+      {tab === 'Seating' && <SeatingTab eventId={eventId} onError={setError} onMessage={setMessage} />}
+      {tab === 'Analytics' && <AnalyticsTab eventId={eventId} onError={setError} />}
+      {tab === 'History' && <HistoryTab eventId={eventId} onError={setError} />}
       {tab === 'Campaigns' && <Campaigns eventId={eventId} onError={setError} onMessage={setMessage} />}
       {tab === 'Attendees' && <Attendees eventId={eventId} onError={setError} />}
       {tab === 'Orders' && <EventOrders eventId={eventId} onError={setError} />}
@@ -120,7 +128,10 @@ function Overview({ event, onUpdate, onError, onMessage }: {
         capacity: data.get('capacity') ? Number(data.get('capacity')) : null,
         registrationOpensAt: data.get('opens') ? new Date(String(data.get('opens'))).toISOString() : null,
         registrationClosesAt: data.get('closes') ? new Date(String(data.get('closes'))).toISOString() : null,
-        imageUrls: event.imageUrls ?? [],
+        imageUrls: String(data.get('imageUrls')).split('\n').map((url) => url.trim()).filter(Boolean),
+        venueAddress: String(data.get('venueAddress')).trim() || null,
+        timezone: String(data.get('timezone')).trim() || null,
+        refundPolicy: String(data.get('refundPolicy')).trim() || null,
       })
       onUpdate(saved)
       onMessage('Event details saved.')
@@ -131,23 +142,8 @@ function Overview({ event, onUpdate, onError, onMessage }: {
     }
   }
 
-  async function activateSales() {
-    onError('')
-    onMessage('')
-    setBusy(true)
-    try {
-      await activatePaidSales(event.id)
-      onUpdate({ ...event, paidSalesStatus: 'Active' })
-      onMessage('Paid sales simulation activated. This does not collect payment or configure real payouts.')
-    } catch (err) {
-      onError(err instanceof Error ? err.message : 'Could not activate paid sales.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
-    <section className="grid gap-6 lg:grid-cols-[1fr_300px]">
+    <section className="grid gap-6 lg:grid-cols-[1fr_340px]">
       <form onSubmit={(ev) => void submit(ev)} className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
         <div><h2 className="text-xl font-bold">Event details</h2><p className="mt-1 text-sm text-slate-500">Keep your event information up to date for guests.</p></div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -155,6 +151,8 @@ function Overview({ event, onUpdate, onError, onMessage }: {
           <label className="text-sm font-medium sm:col-span-2">Description<textarea name="description" required minLength={20} rows={4} defaultValue={event.description} className={`${inputClass} mt-1.5`} /></label>
           <label className="text-sm font-medium">Venue<input name="venue" required defaultValue={event.venue} className={`${inputClass} mt-1.5`} /></label>
           <label className="text-sm font-medium">City<input name="city" required defaultValue={event.city} className={`${inputClass} mt-1.5`} /></label>
+          <label className="text-sm font-medium">Venue address<input name="venueAddress" maxLength={300} defaultValue={event.venueAddress ?? ''} className={`${inputClass} mt-1.5`} /></label>
+          <label className="text-sm font-medium">Time zone (IANA)<input name="timezone" placeholder="Asia/Almaty" defaultValue={event.timezone ?? 'Asia/Almaty'} className={`${inputClass} mt-1.5`} /></label>
           <label className="text-sm font-medium">Category<input name="category" defaultValue={event.category ?? ''} className={`${inputClass} mt-1.5`} /></label>
           <label className="text-sm font-medium">Visibility<select name="visibility" defaultValue={event.visibility ?? 'Public'} className={`${inputClass} mt-1.5`}><option>Public</option><option>Unlisted</option><option>Private</option></select></label>
           <label className="text-sm font-medium">Starts<input name="start" required type="datetime-local" defaultValue={localDateTime(event.startDateUtc)} className={`${inputClass} mt-1.5`} /></label>
@@ -163,14 +161,12 @@ function Overview({ event, onUpdate, onError, onMessage }: {
           <label className="text-sm font-medium">Registration opens<input name="opens" type="datetime-local" defaultValue={localDateTime(event.registrationOpensAt)} className={`${inputClass} mt-1.5`} /></label>
           <label className="text-sm font-medium">Registration closes<input name="closes" type="datetime-local" defaultValue={localDateTime(event.registrationClosesAt)} className={`${inputClass} mt-1.5`} /></label>
         </div>
-        <label className="flex items-center gap-2 text-sm font-medium"><input name="published" type="checkbox" defaultChecked={event.isPublished} className="size-4 accent-indigo-600" /> Publish event</label>
+        <label className="block text-sm font-medium">Refund policy shown to attendees<textarea name="refundPolicy" rows={3} maxLength={2000} defaultValue={event.refundPolicy ?? ''} className={`${inputClass} mt-1.5`} /></label>
+        <label className="block text-sm font-medium">Image URLs (one per line)<textarea name="imageUrls" rows={2} defaultValue={(event.imageUrls ?? []).join('\n')} className={`${inputClass} mt-1.5`} /></label>
+        <label className="flex items-center gap-2 text-sm font-medium"><input name="published" type="checkbox" defaultChecked={event.isPublished} className="size-4 accent-indigo-600" /> Published — untick to unpublish and return the event to draft</label>
         <button disabled={busy} className={buttonClass}>{busy ? 'Saving…' : 'Save event details'}</button>
       </form>
-      <aside className="h-fit space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div><h2 className="text-lg font-bold">Paid ticket sales</h2><p className="mt-1 text-sm leading-6 text-slate-500">Payment activation is a classroom simulation only. It does not verify identity, collect a fee, or configure payouts.</p></div>
-        <p className="rounded-xl bg-slate-50 p-3 text-sm">Status: <strong>{event.paidSalesStatus ?? 'None'}</strong></p>
-        {event.paidSalesStatus !== 'Active' && <button disabled={busy} onClick={() => void activateSales()} className="w-full rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">Activate simulation</button>}
-      </aside>
+      <PaidSalesPanel event={event} onStatus={(paidSalesStatus) => onUpdate({ ...event, paidSalesStatus })} onError={onError} onMessage={onMessage} />
     </section>
   )
 }
@@ -231,7 +227,7 @@ function Tickets({ eventId, event, onError, onMessage }: {
         <div className="flex items-end justify-between"><div><h2 className="text-xl font-bold">Ticket inventory</h2><p className="mt-1 text-sm text-slate-500">Track sold, reserved, and remaining seats for {event.title}.</p></div><span className="text-sm text-slate-500">{types.length} types</span></div>
         {types.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Add a ticket type to begin registration.</p> : types.map((type) => (
           <article key={type.id} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div><div className="flex items-center gap-2"><h3 className="font-bold">{type.name}</h3>{type.isHidden && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Hidden</span>}</div><p className="mt-1 text-sm text-slate-500">{type.price ? formatKzt(type.price) : 'Free'} · {type.soldQuantity} sold · {type.reservedQuantity} reserved · {type.availableQuantity} remaining</p></div>
+            <div><div className="flex items-center gap-2"><h3 className="font-bold">{type.name}</h3>{type.isHidden && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Hidden</span>}</div><p className="mt-1 text-sm text-slate-500">{type.price ? formatKzt(type.price) : 'Free'} · {type.availableQuantity} available · {type.reservedQuantity} reserved · {type.soldQuantity} sold · {type.refundedQuantity} refunded · {type.checkedInQuantity} checked in</p></div>
             <div className="flex gap-2"><button onClick={() => setEditing(type)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50">Edit</button><button onClick={() => void remove(type.id)} className="rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Delete</button></div>
           </article>
         ))}
@@ -387,28 +383,71 @@ function Attendees({ eventId, onError }: { eventId: string; onError: (value: str
 
 function EventOrders({ eventId, onError }: { eventId: string; onError: (value: string) => void }) {
   const [orders, setOrders] = useState<Order[]>([])
+  const [refunds, setRefunds] = useState<Refund[]>([])
   const [busyOrder, setBusyOrder] = useState('')
+  const [refunding, setRefunding] = useState('')
+  const [reason, setReason] = useState('')
   useEffect(() => {
-    getEventOrders(eventId).then(setOrders)
+    Promise.all([getEventOrders(eventId), getEventRefunds(eventId)])
+      .then(([orderRows, refundRows]) => { setOrders(orderRows); setRefunds(refundRows) })
       .catch((err: unknown) => onError(err instanceof Error ? err.message : 'Could not load event orders.'))
   }, [eventId, onError])
-  async function cancelOrder(orderId: string) {
+
+  async function update(orderId: string, action: () => Promise<Order>, failure: string) {
     onError('')
     setBusyOrder(orderId)
     try {
-      const cancelled = await cancelFreeOrder(eventId, orderId)
-      setOrders((current) => current.map((order) => order.id === cancelled.id ? cancelled : order))
+      const updated = await action()
+      setOrders((current) => current.map((order) => order.id === updated.id ? updated : order))
+      setRefunds(await getEventRefunds(eventId))
+      setRefunding('')
+      setReason('')
     } catch (err) {
-      onError(err instanceof Error ? err.message : 'Could not cancel this order.')
+      onError(err instanceof Error ? err.message : failure)
     } finally {
       setBusyOrder('')
     }
   }
+
+  const gross = orders.filter((order) => order.status === 'Confirmed' || order.status === 'Refunded').reduce((sum, order) => sum + order.total, 0)
+  const fees = orders.filter((order) => order.status === 'Confirmed').reduce((sum, order) => sum + order.feeTotal, 0)
+  const refunded = refunds.reduce((sum, refund) => sum + refund.amount, 0)
   return (
-    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div><h2 className="text-xl font-bold">Orders</h2><p className="mt-1 text-sm text-slate-500">Reservations and payment status for this event.</p></div>
-      {orders.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No orders yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr><th className="p-3">Order</th><th className="p-3">Attendee</th><th className="p-3">Tickets</th><th className="p-3">Total</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id} className="border-t border-slate-100"><td className="p-3 font-mono text-xs">{order.id.slice(0, 8)}</td><td className="p-3">{order.items[0]?.tickets[0]?.attendeeName ?? 'Attendee'}</td><td className="p-3">{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td><td className="p-3 font-semibold">{formatKzt(order.total)}</td><td className="p-3">{order.status}</td><td className="p-3">{order.status === 'Confirmed' && order.total === 0 && <button disabled={busyOrder === order.id} onClick={() => void cancelOrder(order.id)} className="text-xs font-semibold text-rose-700 hover:underline">{busyOrder === order.id ? 'Cancelling…' : 'Cancel free order'}</button>}</td></tr>)}</tbody></table></div>}
-    </section>
+    <div className="space-y-6">
+      <section className="grid gap-4 sm:grid-cols-4">
+        {([['Gross sales', gross], ['Processing fees', fees], ['Refunds', refunded], ['Estimated payout', gross - fees - refunded]] as [string, number][]).map(([label, amount]) => (
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 text-xl font-black">{formatKzt(amount)}</p><p className="text-xs text-slate-400">Demonstration only</p></div>
+        ))}
+      </section>
+      <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div><h2 className="text-xl font-bold">Orders</h2><p className="mt-1 text-sm text-slate-500">Reservations and payment status for this event. Refunds are full, simulated, and invalidate the order's tickets.</p></div>
+        {orders.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No orders yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr><th className="p-3">Order</th><th className="p-3">Attendee</th><th className="p-3">Tickets</th><th className="p-3">Total</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead><tbody>{orders.map((order) => (
+          <tr key={order.id} className="border-t border-slate-100 align-top">
+            <td className="p-3 font-mono text-xs">{order.id.slice(0, 8)}<span className="block font-sans text-slate-400">{formatDateTime(order.createdAt)}</span></td>
+            <td className="p-3">{order.items[0]?.tickets[0]?.attendeeName ?? 'Attendee'}<span className="block text-xs text-slate-500">{order.items[0]?.tickets[0]?.attendeeEmail}</span></td>
+            <td className="p-3">{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td>
+            <td className="p-3 font-semibold">{formatKzt(order.total)}{order.promoCode && <span className="block text-xs font-normal text-emerald-700">{order.promoCode} −{formatKzt(order.discountTotal)}</span>}</td>
+            <td className="p-3">{order.status}</td>
+            <td className="p-3">
+              {order.status === 'Confirmed' && order.total === 0 && <button disabled={busyOrder === order.id} onClick={() => void update(order.id, () => cancelFreeOrder(eventId, order.id), 'Could not cancel this order.')} className="text-xs font-semibold text-rose-700 hover:underline">{busyOrder === order.id ? 'Cancelling…' : 'Cancel free order'}</button>}
+              {order.status === 'Confirmed' && order.total > 0 && refunding !== order.id && <button onClick={() => { setRefunding(order.id); setReason('') }} className="text-xs font-semibold text-rose-700 hover:underline">Refund order</button>}
+              {refunding === order.id && (
+                <div className="space-y-2">
+                  <input aria-label="Refund reason" value={reason} onChange={(change) => setReason(change.target.value)} maxLength={500} placeholder="Reason (optional)" className={inputClass} />
+                  <div className="flex gap-2"><button disabled={busyOrder === order.id} onClick={() => void update(order.id, () => refundOrder(eventId, order.id, reason.trim()), 'Could not refund this order.')} className="rounded-lg bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white">{busyOrder === order.id ? 'Refunding…' : `Confirm full refund of ${formatKzt(order.total)}`}</button><button onClick={() => setRefunding('')} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold">Keep order</button></div>
+                </div>
+              )}
+            </td>
+          </tr>
+        ))}</tbody></table></div>}
+      </section>
+      {refunds.length > 0 && (
+        <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold">Refunds</h2>
+          <ul className="divide-y divide-slate-100 text-sm">{refunds.map((refund) => <li key={refund.id} className="flex flex-wrap justify-between gap-2 py-2"><span><span className="font-mono text-xs">{refund.orderId.slice(0, 8)}</span> · {formatDateTime(refund.createdAt)}{refund.reason ? ` · ${refund.reason}` : ''}</span><strong>{formatKzt(refund.amount)}{refund.isSimulated ? ' (simulated)' : ''}</strong></li>)}</ul>
+        </section>
+      )}
+    </div>
   )
 }
 

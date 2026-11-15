@@ -61,4 +61,29 @@ describe('apiFetch', () => {
     ).rejects.toEqual(new ApiError(401, 'Invalid email or password'))
     expect(getToken()).toBe('still-valid')
   })
+
+  it('renews an expired access token with the refresh token and retries once', async () => {
+    saveSession('expired', '2099-01-01T00:00:00.000Z', {
+      id: 'user-1',
+      email: 'attendee@example.com',
+      role: 'Attendee',
+      emailConfirmed: true,
+    }, 'refresh-1')
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        accessToken: 'fresh',
+        refreshToken: 'refresh-2',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        userId: 'user-1',
+        email: 'attendee@example.com',
+        role: 'Attendee',
+        emailConfirmed: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'ok' }), { status: 200 }))
+
+    await expect(apiFetch<{ message: string }>('/api/example')).resolves.toEqual({ message: 'ok' })
+    expect(getToken()).toBe('fresh')
+    expect(vi.mocked(fetch).mock.calls[1][0]).toBe('/api/auth/refresh')
+  })
 })

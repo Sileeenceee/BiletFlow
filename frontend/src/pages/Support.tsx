@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { addSupportMessage, createSupportCase, getNotifications, getSupportCases, markNotificationRead, updateSupportCase, type SupportCase } from '../api/workflows'
+import { escalateSupportCase } from '../api/platform'
 import { buttonClass, inputClass } from '../components/form'
 import { useAuth } from '../lib/auth'
 import { formatDateTime } from '../lib/format'
@@ -19,7 +20,7 @@ export default function Support() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [createMode, setCreateMode] = useState(false)
+  const [createMode, setCreateMode] = useState(searchParams.get('new') === '1')
   const [reply, setReply] = useState('')
   const isStaff = user?.role === 'PlatformAdmin' || user?.role === 'Organizer'
   const canOpenCase = user?.role === 'Attendee' || user?.role === 'Organizer'
@@ -119,6 +120,17 @@ export default function Support() {
     }
   }
 
+  async function escalate() {
+    if (!activeCase) return
+    setError('')
+    try {
+      await escalateSupportCase(activeCase.id, '')
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not escalate this case.')
+    }
+  }
+
   async function readNotification(item: Notification) {
     setError('')
     try {
@@ -148,7 +160,7 @@ export default function Support() {
           <label className="block text-sm font-medium">Category<select name="category" required className={`${inputClass} mt-1.5`}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
           <label className="block text-sm font-medium">Subject<input name="subject" required maxLength={200} className={`${inputClass} mt-1.5`} /></label>
           <label className="block text-sm font-medium">Message<textarea name="message" required maxLength={4000} rows={6} className={`${inputClass} mt-1.5`} /></label>
-          {(searchParams.get('orderId') || searchParams.get('eventId')) && <p className="rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800">This request will include the related {searchParams.get('orderId') ? 'order' : 'event'} reference.</p>}
+          {(searchParams.get('orderId') || searchParams.get('eventId') || searchParams.get('ticketId')) && <p className="rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800">This request will include the related {[searchParams.get('eventId') && 'event', searchParams.get('orderId') && 'order', searchParams.get('ticketId') && 'ticket'].filter(Boolean).join(', ')} reference.</p>}
           <div className="flex gap-3"><button disabled={busy} className={buttonClass}>{busy ? 'Sending…' : 'Submit request'}</button><button type="button" onClick={() => setCreateMode(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancel</button></div>
         </form>
       ) : (
@@ -166,7 +178,7 @@ export default function Support() {
           <section className="min-h-96 rounded-2xl border border-slate-200 bg-white shadow-sm">
             {!activeCase ? <div className="grid min-h-96 place-items-center p-8 text-center"><div><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-indigo-50 text-xl">✉</div><h2 className="mt-4 font-bold">Your conversations, together</h2><p className="mt-1 text-sm text-slate-500">Select a request to view its messages and reply.</p></div></div> : (
               <>
-                <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">{activeCase.category}</p><h2 className="mt-1 text-xl font-bold">{activeCase.subject}</h2><p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(activeCase.updatedAt)}</p></div>{isStaff && <select aria-label="Case status" value={activeCase.status} onChange={(event) => void changeStatus(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm"><option value="Open">Open</option><option value="In Progress">In progress</option><option value="Waiting for Customer">Waiting for customer</option><option value="Resolved">Resolved</option></select>}</header>
+                <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">{activeCase.category}</p><h2 className="mt-1 text-xl font-bold">{activeCase.subject}</h2><p className="mt-1 text-xs text-slate-500">Updated {formatDateTime(activeCase.updatedAt)}{activeCase.isEscalated ? ' · Escalated to platform support' : ''}</p><p className="mt-2 flex flex-wrap gap-2 text-xs">{activeCase.eventId && <Link to={`/events/${activeCase.eventId}`} className="rounded-full bg-slate-100 px-2 py-1 font-semibold text-slate-600 hover:bg-slate-200">Event</Link>}{activeCase.orderId && <span className="rounded-full bg-slate-100 px-2 py-1 font-mono text-slate-600">Order {activeCase.orderId.slice(0, 8)}</span>}{activeCase.ticketId && <span className="rounded-full bg-slate-100 px-2 py-1 font-mono text-slate-600">Ticket {activeCase.ticketId.slice(0, 8)}</span>}{!activeCase.isEscalated && activeCase.type === 'Attendee' && activeCase.status !== 'Resolved' && user?.role !== 'PlatformAdmin' && <button onClick={() => void escalate()} className="rounded-full border border-amber-200 px-2 py-1 font-semibold text-amber-800 hover:bg-amber-50">Escalate to platform</button>}</p></div>{isStaff && <select aria-label="Case status" value={activeCase.status} onChange={(event) => void changeStatus(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm"><option value="Open">Open</option><option value="In Progress">In progress</option><option value="Waiting for Customer">Waiting for customer</option><option value="Resolved">Resolved</option></select>}</header>
                 <div className="max-h-[500px] space-y-4 overflow-y-auto p-5">
                   {activeCase.messages.map((message) => {
                     const ownMessage = message.senderUserId === user?.id

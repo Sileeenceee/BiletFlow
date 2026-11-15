@@ -1,7 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { Nav } from './components/Nav'
 import { AuthProvider } from './lib/auth'
+import { LocaleProvider } from './lib/i18n'
 import { RequireAuth } from './lib/RequireAuth'
+import Account from './pages/Account'
+import Admin from './pages/Admin'
 import CreateEvent from './pages/CreateEvent'
 import EventAdmin from './pages/EventAdmin'
 import EventDetail from './pages/EventDetail'
@@ -10,6 +13,8 @@ import ForgotPassword from './pages/ForgotPassword'
 import Login from './pages/Login'
 import ManageEvent from './pages/ManageEvent'
 import NotFound from './pages/NotFound'
+import Notifications from './pages/Notifications'
+import OrganizerDashboard from './pages/OrganizerDashboard'
 import Orders from './pages/Orders'
 import OrganizerProfile from './pages/OrganizerProfile'
 import CampaignRedirect from './pages/CampaignRedirect'
@@ -21,6 +26,7 @@ import VerifyEmail from './pages/VerifyEmail'
 export default function App() {
   return (
     <BrowserRouter>
+      <LocaleProvider>
       <AuthProvider>
         <Nav />
         <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -66,6 +72,42 @@ export default function App() {
             />
 
             <Route
+              path="/organizer/dashboard"
+              element={
+                <RequireAuth roles={['Organizer', 'PlatformAdmin']}>
+                  <OrganizerDashboard />
+                </RequireAuth>
+              }
+            />
+
+            <Route
+              path="/admin"
+              element={
+                <RequireAuth roles={['PlatformAdmin']}>
+                  <Admin />
+                </RequireAuth>
+              }
+            />
+
+            <Route
+              path="/notifications"
+              element={
+                <RequireAuth>
+                  <Notifications />
+                </RequireAuth>
+              }
+            />
+
+            <Route
+              path="/account"
+              element={
+                <RequireAuth>
+                  <Account />
+                </RequireAuth>
+              }
+            />
+
+            <Route
               path="/orders"
               element={
                 <RequireAuth>
@@ -96,6 +138,7 @@ export default function App() {
           </Routes>
         </main>
       </AuthProvider>
+      </LocaleProvider>
     </BrowserRouter>
   )
 }

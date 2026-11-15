@@ -1,6 +1,6 @@
-import { clearSession, getToken } from '../lib/storage'
+import { clearSession, getRefreshToken, getStoredUser, getToken, saveSession } from '../lib/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
 
 export class ApiError extends Error {
   status: number
@@ -23,7 +23,8 @@ type Options = RequestInit & {
 
 export async function apiFetch<T>(path: string, options: Options = {}): Promise<T> {
   const { redirectOnUnauthorized = true, ...init } = options
-  const res = await send(path, init)
+  let res = await send(path, init)
+  if (res.status === 401 && redirectOnUnauthorized && (await refreshSession())) res = await send(path, init)
 
   await assertSuccess(res, redirectOnUnauthorized)
 
@@ -31,9 +32,39 @@ export async function apiFetch<T>(path: string, options: Options = {}): Promise<
 }
 
 export async function apiBlob(path: string): Promise<Blob> {
-  const res = await send(path)
+  let res = await send(path)
+  if (res.status === 401 && (await refreshSession())) res = await send(path)
   await assertSuccess(res, true)
   return res.blob()
+}
+
+let refreshing: Promise<boolean> | null = null
+
+/**
+ * Exchanges the stored refresh token for a new access/refresh pair. The API
+ * invalidates a refresh token on use, so concurrent 401s share one request.
+ */
+function refreshSession(): Promise<boolean> {
+  const refreshToken = getRefreshToken()
+  const user = getStoredUser()
+  if (!refreshToken || !user) return Promise.resolve(false)
+
+  refreshing ??= fetch(`${API_BASE_URL}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  })
+    .then(async (res) => {
+      if (!res.ok) return false
+      const next = await res.json()
+      saveSession(next.accessToken, next.expiresAt, {
+        id: next.userId, email: next.email, role: next.role, emailConfirmed: next.emailConfirmed,
+      }, next.refreshToken)
+      return true
+    })
+    .catch(() => false)
+    .finally(() => { refreshing = null })
+  return refreshing
 }
 
 async function send(path: string, init: RequestInit = {}): Promise<Response> {

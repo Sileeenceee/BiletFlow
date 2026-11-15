@@ -17,6 +17,13 @@ export type EventSummary = {
   isCancelled?: boolean
   capacity?: number | null
   paidSalesStatus?: 'None' | 'Pending' | 'Active' | 'Suspended'
+  venueAddress?: string
+  /** IANA time zone, for example Asia/Almaty. */
+  timezone?: string
+  refundPolicy?: string | null
+  seatingMode?: 'General' | 'Assigned'
+  isSuspended?: boolean
+  lifecycleStatus?: 'Upcoming' | 'Active' | 'Completed' | 'Cancelled'
 }
 
 export type CreateEventInput = {
@@ -33,6 +40,9 @@ export type CreateEventInput = {
   registrationOpensAt?: string | null
   registrationClosesAt?: string | null
   capacity?: number | null
+  venueAddress?: string | null
+  timezone?: string | null
+  refundPolicy?: string | null
 }
 
 export type TicketType = {
@@ -63,6 +73,9 @@ export type Ticket = {
   attendeeEmail: string
   ticketTypeName: string
   qrCodeDataUri: string | null
+  sectionName?: string | null
+  rowLabel?: string | null
+  seatNumber?: string | null
 }
 
 export type OrderItem = {
@@ -87,6 +100,9 @@ export type Order = {
   expiresAt: string | null
   paymentStatus: string | null
   promoCode: string | null
+  refundTotal?: number
+  confirmedAt?: string | null
+  isSimulated?: boolean
 }
 
 export type PromoCampaign = {
@@ -178,6 +194,8 @@ export function checkout(input: {
   attendeeName: string
   attendeeEmail: string
   items: CheckoutItem[]
+  /** Chosen seats for assigned-seating events; the ticket type comes from the seat's section. */
+  seatIds?: string[]
   promoCode?: string
   campaignToken?: string
 }): Promise<Order> {

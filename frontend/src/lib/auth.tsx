@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import type { Session } from '../api/auth'
-import { clearSession, getStoredUser, saveSession, updateStoredUser, type StoredUser } from './storage'
+import { logout, type Session } from '../api/auth'
+import { clearSession, getRefreshToken, getStoredUser, saveSession, updateStoredUser, type StoredUser } from './storage'
 
 type AuthContextValue = {
   user: StoredUser | null
@@ -17,11 +17,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<StoredUser | null>(() => getStoredUser())
 
   function signIn(session: Session) {
-    saveSession(session.token, session.expiresAt, session.user)
+    saveSession(session.token, session.expiresAt, session.user, session.refreshToken)
     setUser(session.user)
   }
 
   function signOut() {
+    // Best effort: the session is dropped locally even when the API is unreachable.
+    const refreshToken = getRefreshToken()
+    if (refreshToken) void logout(refreshToken).catch(() => undefined)
     clearSession()
     setUser(null)
   }

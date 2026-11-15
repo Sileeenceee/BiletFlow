@@ -112,7 +112,7 @@ export default function EventAdmin() {
     setResult(null)
     setBusy(true)
     try {
-      const verified = await validateTicket(ticketCode.trim())
+      const verified = await validateTicket(ticketCode.trim(), eventId || undefined)
       setResult(verified)
       setMessage(verified.message)
     } catch (err) {
@@ -127,7 +127,7 @@ export default function EventAdmin() {
     setMessage('')
     setBusy(true)
     try {
-      const verified = await checkInTicket(ticketCode.trim())
+      const verified = await checkInTicket(ticketCode.trim(), eventId || undefined)
       setResult(verified)
       setMessage(verified.message)
       if (verified.result === 'CheckedIn' && eventId) {

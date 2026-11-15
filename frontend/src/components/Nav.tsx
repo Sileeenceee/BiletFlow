@@ -1,11 +1,35 @@
-import { Link, NavLink } from 'react-router'
+import { useEffect, useState } from 'react'
+import { Link, NavLink, useLocation } from 'react-router'
+import { getNotifications } from '../api/workflows'
 import { useAuth } from '../lib/auth'
+import { locales, useLocale, type Locale } from '../lib/i18n'
 
 export function Nav() {
   const { user, signOut } = useAuth()
+  const { locale, setLocale, t } = useLocale()
+  const location = useLocation()
+  const [unread, setUnread] = useState(0)
   const isOrganizer = user?.role === 'Organizer' || user?.role === 'PlatformAdmin'
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `rounded-full px-3 py-2 text-sm font-medium transition ${isActive ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`
+
+  // Refreshed on navigation and once a minute; the API has no push channel (SRS 4.13).
+  useEffect(() => {
+    if (!user) return
+    let active = true
+    const load = () => getNotifications()
+      .then((items) => { if (active) setUnread(items.filter((item) => !item.readAt).length) })
+      .catch(() => undefined)
+    void load()
+    const timer = window.setInterval(() => void load(), 60_000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [user, location.pathname])
+
+  const languagePicker = (
+    <select aria-label={t('nav.language')} value={locale} onChange={(event) => setLocale(event.target.value as Locale)} className="rounded-full border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700">
+      {locales.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
+    </select>
+  )
 
   return (
     <>
@@ -17,29 +41,37 @@ export function Nav() {
           </Link>
           {user && (
             <div className="flex flex-wrap items-center gap-1">
-              <NavLink to="/events" className={linkClass}>Explore</NavLink>
-              {user.role === 'Attendee' && <NavLink to="/orders" className={linkClass}>My tickets</NavLink>}
-              {isOrganizer && <NavLink to="/events/new" className={linkClass}>Create event</NavLink>}
-              {isOrganizer && <NavLink to="/organizer/profile" className={linkClass}>Organizer profile</NavLink>}
+              <NavLink to="/events" end className={linkClass}>{t('nav.explore')}</NavLink>
+              {user.role === 'Attendee' && <NavLink to="/orders" className={linkClass}>{t('nav.tickets')}</NavLink>}
+              {isOrganizer && <NavLink to="/organizer/dashboard" className={linkClass}>{t('nav.dashboard')}</NavLink>}
+              {isOrganizer && <NavLink to="/events/new" className={linkClass}>{t('nav.create')}</NavLink>}
+              {isOrganizer && <NavLink to="/organizer/profile" className={linkClass}>{t('nav.profile')}</NavLink>}
               {user.role === 'EventAdmin' &&
-                <NavLink to="/event-admin" className={linkClass}>Check-in</NavLink>}
-              <NavLink to="/support" className={linkClass}>Support</NavLink>
+                <NavLink to="/event-admin" className={linkClass}>{t('nav.checkin')}</NavLink>}
+              {user.role === 'PlatformAdmin' && <NavLink to="/admin" className={linkClass}>{t('nav.admin')}</NavLink>}
+              <NavLink to="/support" className={linkClass}>{t('nav.support')}</NavLink>
+              <NavLink to="/notifications" className={linkClass}>
+                {t('nav.notifications')}
+                {unread > 0 && <span className="ml-1.5 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">{unread}</span>}
+              </NavLink>
             </div>
           )}
           {user ? (
             <div className="ml-auto flex items-center gap-3 text-sm">
-              <span className="hidden text-right sm:block">
+              {languagePicker}
+              <Link to="/account" className="hidden text-right hover:underline sm:block" aria-label={t('nav.account')}>
                 <span className="block font-semibold text-slate-800">{user.email}</span>
                 <span className="block text-xs text-slate-500">{user.role}</span>
-              </span>
+              </Link>
               <button onClick={signOut} className="rounded-full border border-slate-200 px-4 py-2 font-semibold text-slate-700 transition hover:bg-slate-50">
-                Sign out
+                {t('nav.signOut')}
               </button>
             </div>
           ) : (
             <div className="ml-auto flex items-center gap-3 text-sm">
-              <Link to="/login" className="font-semibold text-slate-700">Sign in</Link>
-              <Link to="/register" className="rounded-full bg-indigo-600 px-4 py-2 font-semibold text-white transition hover:bg-indigo-700">Create account</Link>
+              {languagePicker}
+              <Link to="/login" className="font-semibold text-slate-700">{t('nav.signIn')}</Link>
+              <Link to="/register" className="rounded-full bg-indigo-600 px-4 py-2 font-semibold text-white transition hover:bg-indigo-700">{t('nav.register')}</Link>
             </div>
           )}
         </div>
@@ -47,9 +79,9 @@ export function Nav() {
 
       {user && !user.emailConfirmed && (
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
-          Your email is not verified.{' '}
-          <Link to="/verify-email" className="font-semibold underline">
-            Verify it now
+          {t('nav.unverified')}{' '}
+          <Link to="/account" className="font-semibold underline">
+            {t('nav.verifyNow')}
           </Link>
         </div>
       )}

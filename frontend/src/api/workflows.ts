@@ -33,6 +33,7 @@ export type SupportCase = {
   createdAt: string
   updatedAt: string
   messages: SupportMessage[]
+  isEscalated?: boolean
 }
 
 export type AssignedEvent = {
@@ -54,6 +55,7 @@ export type VerificationResult = {
   attendeeEmail: string | null
   ticketStatus: string | null
   checkedInAt: string | null
+  seatLabel?: string | null
 }
 
 export type CheckInSummary = {
@@ -137,6 +139,8 @@ export function getNotifications(): Promise<{
   relatedCaseId: string | null
   createdAt: string
   readAt: string | null
+  relatedEventId?: string | null
+  relatedOrderId?: string | null
 }[]> {
   return apiFetch('/api/notifications')
 }
@@ -149,17 +153,17 @@ export function getAssignedEvents(): Promise<AssignedEvent[]> {
   return apiFetch('/api/event-admin/events')
 }
 
-export function validateTicket(ticketCode: string): Promise<VerificationResult> {
+export function validateTicket(ticketCode: string, eventId?: string): Promise<VerificationResult> {
   return apiFetch('/api/verification/validate', {
     method: 'POST',
-    body: JSON.stringify({ ticketCode }),
+    body: JSON.stringify({ ticketCode, eventId }),
   })
 }
 
-export function checkInTicket(ticketCode: string): Promise<VerificationResult> {
+export function checkInTicket(ticketCode: string, eventId?: string): Promise<VerificationResult> {
   return apiFetch('/api/verification/check-in', {
     method: 'POST',
-    body: JSON.stringify({ ticketCode }),
+    body: JSON.stringify({ ticketCode, eventId }),
   })
 }
 

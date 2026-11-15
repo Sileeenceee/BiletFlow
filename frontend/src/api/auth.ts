@@ -14,6 +14,7 @@ type AuthResponse = {
   email: string
   role: Role
   emailConfirmed: boolean
+  refreshToken?: string
 }
 
 /** POST /api/auth/register -> 201. Note: no token is issued here. */
@@ -35,9 +36,11 @@ export type Session = {
   token: string
   expiresAt: string
   user: StoredUser
+  refreshToken?: string
 }
 
 export type RegisterInput = {
+  fullName?: string
   email: string
   password: string
   /** Backend field: createOrganizerProfile. Registers the user as Organizer. */
@@ -58,6 +61,7 @@ export async function login(email: string, password: string): Promise<Session> {
   return {
     token: res.accessToken,
     expiresAt: res.expiresAt,
+    refreshToken: res.refreshToken,
     user: {
       id: res.userId,
       email: res.email,
@@ -107,4 +111,38 @@ export function getCurrentUser(): Promise<{
   emailConfirmed: boolean
 }> {
   return apiFetch('/api/auth/me')
+}
+
+/** POST /api/auth/logout — revokes the refresh token; the access token simply expires. */
+export function logout(refreshToken: string): Promise<void> {
+  return apiFetch<void>('/api/auth/logout', {
+    method: 'POST',
+    body: JSON.stringify({ refreshToken }),
+    redirectOnUnauthorized: false,
+  })
+}
+
+/** POST /api/auth/resend-verification — verificationToken only in Development. */
+export function resendVerification(email: string): Promise<MessageResponse & { verificationToken: string | null }> {
+  return apiFetch('/api/auth/resend-verification', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+    redirectOnUnauthorized: false,
+  })
+}
+
+/** PUT /api/auth/me — the current password is always required. */
+export function updateAccount(input: { currentPassword: string; email?: string; newPassword?: string }): Promise<{
+  userId: string
+  email: string
+  role: Role
+  emailConfirmed: boolean
+  verificationToken: string | null
+}> {
+  return apiFetch('/api/auth/me', { method: 'PUT', body: JSON.stringify(input), redirectOnUnauthorized: false })
+}
+
+/** DELETE /api/auth/me — 409 when the account still owns events or orders that must be kept. */
+export function deleteAccount(): Promise<void> {
+  return apiFetch<void>('/api/auth/me', { method: 'DELETE' })
 }

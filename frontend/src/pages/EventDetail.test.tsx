@@ -14,6 +14,14 @@ vi.mock('../api/events', () => ({
   payOrder: vi.fn(),
 }))
 
+vi.mock('../api/platform', () => ({
+  getCalendarLinks: vi.fn().mockRejectedValue(new Error('not needed')),
+  getQuote: vi.fn(),
+  getSeatMap: vi.fn(),
+  reportEvent: vi.fn(),
+  seatLabel: vi.fn(),
+}))
+
 const event = {
   id: 'event-1',
   title: 'Summer music night',
