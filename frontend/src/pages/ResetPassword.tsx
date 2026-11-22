@@ -1,42 +1,43 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { z } from 'zod'
 import { resetPassword } from '../api/auth'
-import { Field, buttonClass, inputClass } from '../components/form'
-import { useLocale, type MessageKey } from '../lib/i18n'
-
-// Messages are translation keys; they are translated where the error is shown.
-const schema = z
-  .object({
-    token: z.string().min(1, 'form.required'),
-    newPassword: z.string().min(8, 'form.minPassword'),
-    confirmPassword: z.string().min(1, 'form.required'),
-  })
-  .refine((d) => d.newPassword === d.confirmPassword, {
-    message: 'form.passwordMismatch',
-    path: ['confirmPassword'],
-  })
-
-type FormValues = z.infer<typeof schema>
+import { AuthCard, AuthField, AuthHeading, FormError, PasswordInput, SuccessNote, primaryButtonClass, secondaryButtonClass } from '../components/auth'
+import { useLocale } from '../lib/i18n'
 
 export default function ResetPassword() {
+  const { t } = useLocale()
   const [params] = useSearchParams()
+  const token = params.get('token') ?? ''
   const [formError, setFormError] = useState('')
   const [done, setDone] = useState(false)
-  const { t } = useLocale()
   const navigate = useNavigate()
+
+  // Password rule matches AuthService.IsValidPassword (>= 8 characters).
+  const schema = useMemo(
+    () =>
+      z
+        .object({
+          newPassword: z.string().min(8, t('auth.min8')),
+          confirmPassword: z.string().min(1, t('auth.required')),
+        })
+        .refine((d) => d.newPassword === d.confirmPassword, {
+          message: t('auth.mismatch'),
+          path: ['confirmPassword'],
+        }),
+    [t],
+  )
+  type FormValues = z.infer<typeof schema>
 
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { token: params.get('token') ?? '' },
-  })
+  } = useForm<FormValues>({ resolver: zodResolver(schema) })
 
+  // The timer lives in an effect so leaving the page before it fires does not send the user to /login.
   useEffect(() => {
     if (!done) return
     const timer = window.setTimeout(() => navigate('/login', { replace: true }), 1500)
@@ -46,69 +47,51 @@ export default function ResetPassword() {
   async function onSubmit(values: FormValues) {
     setFormError('')
     try {
-      await resetPassword(values.token, values.newPassword)
+      await resetPassword(token, values.newPassword)
       setDone(true)
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : t('form.genericError'))
+      setFormError(err instanceof Error ? err.message : t('auth.genericError'))
     }
   }
 
-  if (done) {
-    return (
-      <div className="max-w-md space-y-3">
-        <h1 className="text-2xl font-bold">{t('reset.done')}</h1>
-        <p role="status">{t('reset.redirecting')}</p>
-      </div>
-    )
-  }
-
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="max-w-md space-y-4">
-      <h1 className="text-2xl font-bold">{t('reset.title')}</h1>
+    <AuthCard className="mx-auto max-w-[520px]">
+      <AuthHeading title={t('auth.resetTitle')} subtitle={t('auth.resetSubtitle')} />
 
-      <Field id="token" label={t('reset.token')} error={errors.token && t(errors.token.message as MessageKey)}>
-        <input id="token" {...register('token')} className={inputClass} />
-      </Field>
+      {!token ? (
+        <div className="mt-8 space-y-5">
+          <FormError message={t('auth.resetNoToken')} />
+          <Link to="/forgot-password" className={secondaryButtonClass}>
+            {t('auth.requestNew')}
+          </Link>
+        </div>
+      ) : done ? (
+        <div className="mt-8">
+          <SuccessNote title={t('auth.resetDone')} />
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit(onSubmit)} noValidate className="mt-10 space-y-8">
+          <AuthField id="newPassword" label={t('auth.newPassword')} error={errors.newPassword?.message}>
+            <PasswordInput id="newPassword" autoComplete="new-password" invalid={!!errors.newPassword} {...register('newPassword')} />
+          </AuthField>
 
-      <Field id="newPassword" label={t('reset.newPassword')} error={errors.newPassword && t(errors.newPassword.message as MessageKey)}>
-        <input
-          id="newPassword"
-          type="password"
-          autoComplete="new-password"
-          {...register('newPassword')}
-          className={inputClass}
-        />
-      </Field>
+          <AuthField id="confirmPassword" label={t('auth.confirmPassword')} error={errors.confirmPassword?.message}>
+            <PasswordInput
+              id="confirmPassword"
+              autoComplete="new-password"
+              toggle={false}
+              invalid={!!errors.confirmPassword}
+              {...register('confirmPassword')}
+            />
+          </AuthField>
 
-      <Field
-        id="confirmPassword"
-        label={t('reset.confirm')}
-        error={errors.confirmPassword && t(errors.confirmPassword.message as MessageKey)}
-      >
-        <input
-          id="confirmPassword"
-          type="password"
-          autoComplete="new-password"
-          {...register('confirmPassword')}
-          className={inputClass}
-        />
-      </Field>
+          <FormError message={formError} />
 
-      {formError && (
-        <p role="alert" className="text-sm text-red-600">
-          {formError}
-        </p>
+          <button type="submit" disabled={isSubmitting} className={primaryButtonClass}>
+            {isSubmitting ? t('auth.saving') : t('auth.saveButton')}
+          </button>
+        </form>
       )}
-
-      <button type="submit" disabled={isSubmitting} className={buttonClass}>
-        {isSubmitting ? t('reset.submitting') : t('reset.submit')}
-      </button>
-
-      <p className="text-sm">
-        <Link to="/login" className="underline">
-          {t('form.backToSignIn')}
-        </Link>
-      </p>
-    </form>
+    </AuthCard>
   )
 }

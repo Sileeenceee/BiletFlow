@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router'
 import { Nav } from './components/Nav'
 import { AuthProvider } from './lib/auth'
 import { LocaleProvider } from './lib/i18n'
@@ -23,17 +23,29 @@ import ResetPassword from './pages/ResetPassword'
 import Support from './pages/Support'
 import VerifyEmail from './pages/VerifyEmail'
 
+/** Every page except the full-screen log-in page shares the nav bar. */
+function SiteLayout() {
+  return (
+    <>
+      <Nav />
+      <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-12 lg:px-8">
+        <Outlet />
+      </main>
+    </>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <LocaleProvider>
       <AuthProvider>
-        <Nav />
-        <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           <Routes>
+            <Route path="/login" element={<Login />} />
+
+            <Route element={<SiteLayout />}>
             <Route path="/" element={<Navigate to="/events" replace />} />
 
-            <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/verify-email" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -135,8 +147,8 @@ export default function App() {
             />
 
             <Route path="*" element={<NotFound />} />
+            </Route>
           </Routes>
-        </main>
       </AuthProvider>
       </LocaleProvider>
     </BrowserRouter>
