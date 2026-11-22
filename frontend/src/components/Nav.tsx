@@ -42,7 +42,7 @@ export function Nav() {
           {user && (
             <div className="flex flex-wrap items-center gap-1">
               <NavLink to="/events" end className={linkClass}>{t('nav.explore')}</NavLink>
-              {user.role === 'Attendee' && <NavLink to="/orders" className={linkClass}>{t('nav.tickets')}</NavLink>}
+              {(user.role === 'Attendee' || user.role === 'EventAdmin') && <NavLink to="/orders" className={linkClass}>{t('nav.tickets')}</NavLink>}
               {isOrganizer && <NavLink to="/organizer/dashboard" className={linkClass}>{t('nav.dashboard')}</NavLink>}
               {isOrganizer && <NavLink to="/events/new" className={linkClass}>{t('nav.create')}</NavLink>}
               {isOrganizer && <NavLink to="/organizer/profile" className={linkClass}>{t('nav.profile')}</NavLink>}
@@ -59,9 +59,10 @@ export function Nav() {
           {user ? (
             <div className="ml-auto flex items-center gap-3 text-sm">
               {languagePicker}
-              <Link to="/account" className="hidden text-right hover:underline sm:block" aria-label={t('nav.account')}>
-                <span className="block font-semibold text-slate-800">{user.email}</span>
-                <span className="block text-xs text-slate-500">{user.role}</span>
+              <Link to="/account" className="text-right hover:underline" aria-label={t('nav.account')}>
+                <span className="text-xs font-semibold text-slate-700 sm:hidden">{t('nav.account')}</span>
+                <span className="hidden sm:block font-semibold text-slate-800">{user.email}</span>
+                <span className="hidden sm:block text-xs text-slate-500">{user.role}</span>
               </Link>
               <button onClick={signOut} className="rounded-full border border-slate-200 px-4 py-2 font-semibold text-slate-700 transition hover:bg-slate-50">
                 {t('nav.signOut')}

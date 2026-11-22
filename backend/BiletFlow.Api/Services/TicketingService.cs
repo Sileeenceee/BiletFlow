@@ -361,6 +361,7 @@ public sealed class TicketingService(
             var windowError = ValidateRegistrationWindow(ev, now);
             if (windowError is not null) return (null, windowError, ServiceError.BadRequest);
 
+            await ReleaseExpiredOrdersAsync(ev, ticketTypes);
             AdjustCounters(ev, ticketTypes, order.Items, reservedSign: -1, soldSign: 0);
             if (request.Items.Any(item => !ticketTypes.ContainsKey(item.TicketTypeId)))
             {

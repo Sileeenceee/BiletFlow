@@ -82,7 +82,12 @@ public sealed class EventController(EventService eventService) : ControllerBase
         if (userId is null) return Unauthorized();
 
         var result = await eventService.CancelAsync(eventId, userId.Value, IsPlatformAdmin());
-        if (result.Event is null) return NotFound(new { error = result.Error });
+        if (result.Event is null)
+        {
+            return result.Error == "Event not found."
+                ? NotFound(new { error = result.Error })
+                : Conflict(new { error = result.Error });
+        }
 
         return Ok(result.Event);
     }

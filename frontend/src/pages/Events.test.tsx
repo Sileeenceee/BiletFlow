@@ -16,6 +16,7 @@ const publishedEvent: EventSummary = {
   description: 'An evening screening.',
   venue: 'Central Park',
   city: 'Almaty',
+  cityId: 1,
   startDateUtc: '2030-06-01T18:00:00.000Z',
   endDateUtc: '2030-06-01T21:00:00.000Z',
   isPublished: true,

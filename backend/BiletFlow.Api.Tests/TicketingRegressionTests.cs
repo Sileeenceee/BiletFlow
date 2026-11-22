@@ -124,7 +124,7 @@ public sealed class TicketingRegressionTests(ApiFactory factory) : IClassFixture
             title = $"Ticketing regression {suffix}",
             description = "Regression test for pending-order updates and payment ticket issuance.",
             venue = "Integration Test Hall",
-            city = "Almaty",
+            cityId = 1,
             startDateUtc = DateTimeOffset.UtcNow.AddDays(2),
             endDateUtc = DateTimeOffset.UtcNow.AddDays(3),
             isPublished = true,

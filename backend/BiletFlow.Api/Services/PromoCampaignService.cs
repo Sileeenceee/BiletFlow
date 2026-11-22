@@ -22,7 +22,18 @@ public sealed class PromoCampaignService(
             .Where(campaign => campaign.EventId == eventId)
             .OrderByDescending(campaign => campaign.CreatedAt)
             .ToListAsync();
-        return await Task.WhenAll(campaigns.Select(ToResponseAsync));
+        var cutoff = DateTimeOffset.UtcNow - TicketingService.ReservationTime;
+        var redemptions = await db.Orders
+            .Where(order => order.EventId == eventId && order.PromoCampaignId != null &&
+                (order.Status == OrderStatus.Confirmed ||
+                 (order.Status == OrderStatus.Pending && order.CreatedAt > cutoff)))
+            .GroupBy(order => order.PromoCampaignId!.Value)
+            .Select(group => new { CampaignId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.CampaignId, row => row.Count);
+
+        return campaigns
+            .Select(campaign => ToResponse(campaign, redemptions.GetValueOrDefault(campaign.Id)))
+            .ToList();
     }
 
     public async Task<IReadOnlyList<PromoCampaignAnalyticsResponse>?> GetAnalyticsAsync(
@@ -175,7 +186,8 @@ public sealed class PromoCampaignService(
 
         using var generator = new QRCodeGenerator();
         using var data = generator.CreateQrCode(BuildCampaignUrl(token), QRCodeGenerator.ECCLevel.Q);
-        return new PngByteQRCode(data).GetGraphic(8);
+        // Indigo styling visually distinguishes promotional QR codes from black-and-white admission tickets (SRS 4.14).
+        return new PngByteQRCode(data).GetGraphic(10, [67, 56, 202], [238, 242, 255], drawQuietZones: true);
     }
 
     /// <summary>
@@ -309,16 +321,20 @@ public sealed class PromoCampaignService(
 
     private async Task<PromoCampaignResponse> ToResponseAsync(PromoCampaign campaign)
     {
+        var cutoff = DateTimeOffset.UtcNow - TicketingService.ReservationTime;
         var redemptions = await db.Orders.CountAsync(order =>
             order.PromoCampaignId == campaign.Id &&
             (order.Status == OrderStatus.Confirmed ||
-             (order.Status == OrderStatus.Pending && order.CreatedAt > DateTimeOffset.UtcNow - TicketingService.ReservationTime)));
-        return new PromoCampaignResponse(
+             (order.Status == OrderStatus.Pending && order.CreatedAt > cutoff)));
+        return ToResponse(campaign, redemptions);
+    }
+
+    private PromoCampaignResponse ToResponse(PromoCampaign campaign, int redemptions) =>
+        new(
             campaign.Id, campaign.EventId, campaign.Code, campaign.DiscountType.ToString(), campaign.DiscountValue,
             campaign.StartsAt, campaign.EndsAt, campaign.MaxRedemptions, redemptions, campaign.IsEnabled,
             campaign.LinkVisits, campaign.ApplicableTicketTypes.Select(row => row.TicketTypeId).ToList(),
             BuildCampaignUrl(campaign.CampaignToken));
-    }
 
     private Task<bool> CanManageEventAsync(Guid eventId, Guid userId, bool isPlatformAdmin) =>
         db.Events.AnyAsync(ev => ev.Id == eventId && (ev.OrganizerId == userId || isPlatformAdmin));

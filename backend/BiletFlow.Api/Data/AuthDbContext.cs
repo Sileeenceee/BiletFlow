@@ -8,6 +8,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<AuthToken> AuthTokens => Set<AuthToken>();
     public DbSet<OrganizerProfile> OrganizerProfiles => Set<OrganizerProfile>();
+    public DbSet<City> Cities => Set<City>();
     public DbSet<Event> Events => Set<Event>();
     public DbSet<TicketType> TicketTypes => Set<TicketType>();
     public DbSet<Order> Orders => Set<Order>();
@@ -67,6 +68,32 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(profile => profile.SandboxPayoutReference).HasMaxLength(200);
         });
 
+        modelBuilder.Entity<City>(entity =>
+        {
+            entity.HasKey(city => city.Id);
+            entity.Property(city => city.Name).HasMaxLength(120).IsRequired();
+            entity.HasIndex(city => city.Name).IsUnique();
+            entity.HasData(
+                new City { Id = 1, Name = "Almaty" },
+                new City { Id = 2, Name = "Astana" },
+                new City { Id = 3, Name = "Shymkent" },
+                new City { Id = 4, Name = "Karaganda" },
+                new City { Id = 5, Name = "Aktobe" },
+                new City { Id = 6, Name = "Taraz" },
+                new City { Id = 7, Name = "Pavlodar" },
+                new City { Id = 8, Name = "Ust-Kamenogorsk" },
+                new City { Id = 9, Name = "Semey" },
+                new City { Id = 10, Name = "Atyrau" },
+                new City { Id = 11, Name = "Kostanay" },
+                new City { Id = 12, Name = "Kyzylorda" },
+                new City { Id = 13, Name = "Uralsk" },
+                new City { Id = 14, Name = "Petropavlovsk" },
+                new City { Id = 15, Name = "Aktau" },
+                new City { Id = 16, Name = "Turkestan" },
+                new City { Id = 17, Name = "Taldykorgan" },
+                new City { Id = 18, Name = "Kokshetau" });
+        });
+
         modelBuilder.Entity<Event>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -102,6 +129,8 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
                 .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.SeatingVenue).WithMany()
                 .HasForeignKey(e => e.VenueId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<City>().WithMany()
+                .HasForeignKey(e => e.CityId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TicketType>(entity =>

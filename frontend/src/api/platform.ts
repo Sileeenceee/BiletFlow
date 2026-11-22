@@ -115,11 +115,6 @@ export type Seat = {
   label: string
 }
 
-/** Short seat name; the API's own label also carries status and price, which the map states separately. */
-export function seatLabel(sectionName: string, seat: Seat): string {
-  return `${sectionName}, row ${seat.rowLabel}, seat ${seat.number}`
-}
-
 export type SeatMapSection = {
   sectionId: string
   name: string

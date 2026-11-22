@@ -19,7 +19,7 @@ public sealed record CreateEventRequest(
     string Title,
     string Description,
     string Venue,
-    string City,
+    int CityId,
     DateTimeOffset StartDateUtc,
     DateTimeOffset EndDateUtc,
     bool IsPublished = false,

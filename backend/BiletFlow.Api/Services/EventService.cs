@@ -1,6 +1,7 @@
 using BiletFlow.Api.Data;
 using BiletFlow.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using System.Data;
 
 namespace BiletFlow.Api.Services;
@@ -9,6 +10,9 @@ public sealed class EventService(
     AuthDbContext db, AuditService audit, TicketingService ticketing, NotificationService notifications)
 {
     private static readonly string[] LifecycleStatuses = ["Upcoming", "Active", "Completed", "Cancelled"];
+
+    public async Task<IReadOnlyList<City>> GetCitiesAsync() =>
+        await db.Cities.AsNoTracking().OrderBy(city => city.Name).ToListAsync();
 
     /// <summary>Public, published, non-suspended events that have not ended, with optional text/city/category filters.</summary>
     public async Task<IReadOnlyList<Event>> GetPublishedEventsAsync(string? search = null, string? city = null, string? category = null)
@@ -74,6 +78,8 @@ public sealed class EventService(
         var error = ValidateRequest(request);
         if (error is not null) return (null, error);
         if (request.IsPublished && !CanPublish(organizer)) return (null, "Verify your email address before publishing events.");
+        var city = await db.Cities.AsNoTracking().SingleOrDefaultAsync(candidate => candidate.Id == request.CityId);
+        if (city is null) return (null, "City not found. Choose a city from the list.");
 
         var slug = GenerateSlug(request.Title);
         if (string.IsNullOrWhiteSpace(slug)) return (null, "A valid title is required.");
@@ -86,7 +92,7 @@ public sealed class EventService(
             CreatedAt = now,
             UpdatedAt = now
         };
-        Apply(ev, request);
+        Apply(ev, request, city);
 
         db.Events.Add(ev);
         audit.Add(AuditActionType.EventCreated, nameof(Event), ev.Id, ev.Id, organizerId, $"Event '{ev.Title}' created.");
@@ -95,7 +101,7 @@ public sealed class EventService(
             audit.Add(AuditActionType.EventPublished, nameof(Event), ev.Id, ev.Id, organizerId, "Event published.");
         }
 
-        await db.SaveChangesAsync();
+        await SaveWithUniqueSlugAsync(ev, slug);
         return (ev, null);
     }
 
@@ -112,6 +118,8 @@ public sealed class EventService(
         {
             return (null, "Capacity cannot be lower than tickets already issued or reserved.");
         }
+        var city = await db.Cities.AsNoTracking().SingleOrDefaultAsync(candidate => candidate.Id == request.CityId);
+        if (city is null) return (null, "City not found. Choose a city from the list.");
 
         if (request.IsPublished && !ev.IsPublished && !isPlatformAdmin)
         {
@@ -123,13 +131,13 @@ public sealed class EventService(
         if (string.IsNullOrWhiteSpace(slug)) return (null, "A valid title is required.");
 
         var wasPublished = ev.IsPublished;
-        var attendeeFacingChanges = DescribeAttendeeFacingChanges(ev, request);
+        var attendeeFacingChanges = DescribeAttendeeFacingChanges(ev, request, city);
         var otherChanges = ev.Capacity != request.Capacity
             ? $"capacity {(ev.Capacity?.ToString() ?? "unlimited")} → {(request.Capacity?.ToString() ?? "unlimited")}"
             : null;
 
         ev.Slug = await GenerateUniqueSlugAsync(slug, eventId);
-        Apply(ev, request);
+        Apply(ev, request, city);
         ev.UpdatedAt = DateTimeOffset.UtcNow;
 
         var changeList = attendeeFacingChanges.Append(otherChanges).Where(change => change is not null).ToList();
@@ -143,7 +151,7 @@ public sealed class EventService(
 
         if (attendeeFacingChanges.Count > 0) await NotifyTicketHoldersOfUpdateAsync(ev, attendeeFacingChanges);
 
-        await db.SaveChangesAsync();
+        await SaveWithUniqueSlugAsync(ev, slug, eventId);
         return (ev, null);
     }
 
@@ -178,6 +186,7 @@ public sealed class EventService(
             Slug = await GenerateUniqueSlugAsync(GenerateSlug($"{source.Title} copy")),
             Description = source.Description,
             Venue = source.Venue,
+            CityId = source.CityId,
             City = source.City,
             VenueAddress = source.VenueAddress,
             Timezone = source.Timezone,
@@ -212,7 +221,7 @@ public sealed class EventService(
             $"Event duplicated into a new draft '{copy.Title}'.");
         audit.Add(AuditActionType.EventCreated, nameof(Event), copy.Id, copy.Id, organizerId,
             $"Draft created as a copy of '{source.Title}' (no orders, tickets or attendees copied).");
-        await db.SaveChangesAsync();
+        await SaveWithUniqueSlugAsync(copy, GenerateSlug($"{source.Title} copy"));
         return (copy, null);
     }
 
@@ -241,22 +250,29 @@ public sealed class EventService(
     /// </summary>
     public async Task<(Event? Event, string? Error)> CancelAsync(Guid eventId, Guid organizerId, bool isPlatformAdmin)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        var ev = await db.Events.SingleOrDefaultAsync(candidate =>
-            candidate.Id == eventId && (candidate.OrganizerId == organizerId || isPlatformAdmin));
-        if (ev is null) return (null, "Event not found.");
-        if (ev.IsCancelled) return (ev, null);
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var ev = await db.Events.SingleOrDefaultAsync(candidate =>
+                candidate.Id == eventId && (candidate.OrganizerId == organizerId || isPlatformAdmin));
+            if (ev is null) return (null, "Event not found.");
+            if (ev.IsCancelled) return (ev, null);
 
-        await ticketing.SettleOrdersForCancelledEventAsync(ev, organizerId);
+            await ticketing.SettleOrdersForCancelledEventAsync(ev, organizerId);
 
-        ev.IsCancelled = true;
-        ev.IsPublished = false;
-        ev.UpdatedAt = DateTimeOffset.UtcNow;
-        audit.Add(AuditActionType.EventCancelled, nameof(Event), ev.Id, ev.Id, organizerId,
-            isPlatformAdmin && ev.OrganizerId != organizerId ? "Event cancelled by a platform administrator." : "Event cancelled by its organizer.");
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return (ev, null);
+            ev.IsCancelled = true;
+            ev.IsPublished = false;
+            ev.UpdatedAt = DateTimeOffset.UtcNow;
+            audit.Add(AuditActionType.EventCancelled, nameof(Event), ev.Id, ev.Id, organizerId,
+                isPlatformAdmin && ev.OrganizerId != organizerId ? "Event cancelled by a platform administrator." : "Event cancelled by its organizer.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (ev, null);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Event changed while cancelling. Please retry.");
+        }
     }
 
     /// <summary>Chronological activity timeline of an event (SRS 4.16), newest first, with date-range and action filters.</summary>
@@ -309,28 +325,29 @@ public sealed class EventService(
         }
     }
 
-    private static List<string> DescribeAttendeeFacingChanges(Event ev, CreateEventRequest request)
+    private static List<string> DescribeAttendeeFacingChanges(Event ev, CreateEventRequest request, City city)
     {
         var changes = new List<string>();
         if (ev.StartDateUtc != request.StartDateUtc || ev.EndDateUtc != request.EndDateUtc)
         {
             changes.Add($"time {ev.StartDateUtc:yyyy-MM-dd HH:mm} → {request.StartDateUtc:yyyy-MM-dd HH:mm} UTC");
         }
-        if (ev.Venue != request.Venue.Trim() || ev.City != request.City.Trim() ||
+        if (ev.Venue != request.Venue.Trim() || ev.CityId != city.Id ||
             (request.VenueAddress is not null && ev.VenueAddress != request.VenueAddress.Trim()))
         {
-            changes.Add($"venue now {request.Venue.Trim()}, {request.City.Trim()}");
+            changes.Add($"venue now {request.Venue.Trim()}, {city.Name}");
         }
         if (ev.Title != request.Title.Trim()) changes.Add($"title now '{request.Title.Trim()}'");
         return changes;
     }
 
-    private static void Apply(Event ev, CreateEventRequest request)
+    private static void Apply(Event ev, CreateEventRequest request, City city)
     {
         ev.Title = request.Title.Trim();
         ev.Description = request.Description.Trim();
         ev.Venue = request.Venue.Trim();
-        ev.City = request.City.Trim();
+        ev.CityId = city.Id;
+        ev.City = city.Name;
         if (request.VenueAddress is not null) ev.VenueAddress = request.VenueAddress.Trim();
         if (!string.IsNullOrWhiteSpace(request.Timezone)) ev.Timezone = request.Timezone.Trim();
         if (request.RefundPolicy is not null) ev.RefundPolicy = string.IsNullOrWhiteSpace(request.RefundPolicy) ? null : request.RefundPolicy.Trim();
@@ -362,9 +379,6 @@ public sealed class EventService(
         var venue = request.Venue?.Trim() ?? string.Empty;
         if (venue.Length is < 1 or > 250) return "Venue is required and must be at most 250 characters.";
 
-        var city = request.City?.Trim() ?? string.Empty;
-        if (city.Length is < 1 or > 120) return "City is required and must be at most 120 characters.";
-
         if (request.VenueAddress?.Trim().Length > 300) return "Venue address must be at most 300 characters.";
         if (request.RefundPolicy?.Trim().Length > 2000) return "Refund policy must be at most 2000 characters.";
         if (!string.IsNullOrWhiteSpace(request.Timezone) &&
@@ -381,6 +395,14 @@ public sealed class EventService(
             request.RegistrationOpensAt >= request.RegistrationClosesAt)
         {
             return "Registration close must be after registration open.";
+        }
+        if (request.RegistrationOpensAt is not null && request.RegistrationOpensAt >= request.EndDateUtc)
+        {
+            return "Registration open must be before the event ends.";
+        }
+        if (request.RegistrationClosesAt is not null && request.RegistrationClosesAt > request.EndDateUtc)
+        {
+            return "Registration close cannot be after the event ends.";
         }
 
         if (request.ImageUrls is { Length: > 10 } ||
@@ -421,4 +443,28 @@ public sealed class EventService(
 
         return candidate;
     }
+
+    private async Task SaveWithUniqueSlugAsync(Event ev, string baseSlug, Guid? exceptEventId = null)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                await db.SaveChangesAsync();
+                return;
+            }
+            catch (DbUpdateException exception) when (IsSlugUniqueViolation(exception) && attempt < 4)
+            {
+                ev.Slug = await GenerateUniqueSlugAsync($"{baseSlug}-{Random.Shared.Next(1000, 9999)}", exceptEventId);
+            }
+        }
+    }
+
+    private static bool IsSlugUniqueViolation(Exception exception) =>
+        exception is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: "IX_Events_Slug" } ||
+        (exception.InnerException is not null && IsSlugUniqueViolation(exception.InnerException));
+
+    private static bool IsSerializationConflict(Exception exception) =>
+        exception is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.UniqueViolation } ||
+        (exception.InnerException is not null && IsSerializationConflict(exception.InnerException));
 }

@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from 'react'
-import { seatLabel, type Seat, type SeatMap as SeatMapData } from '../api/platform'
+import type { Seat, SeatMap as SeatMapData } from '../api/platform'
 import { formatKzt } from '../lib/format'
+import { useLocale } from '../lib/i18n'
 
 type SeatState = Seat['status'] | 'Selected'
 
@@ -26,19 +27,20 @@ type Props = {
 }
 
 export function SeatMap({ map, selected, limit, onToggle }: Props) {
+  const { t } = useLocale()
   return (
     <div className="space-y-5">
-      <ul className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-600" aria-label="Seat map legend">
+      <ul className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-600" aria-label={t('seatMap.legendLabel')}>
         {(['Available', 'Selected', 'Held', 'Sold', 'Unavailable'] as SeatState[]).map((state) => (
           <li key={state} className="flex items-center gap-1.5">
             <svg width="18" height="18" aria-hidden="true">
               <rect x="1" y="1" width="16" height="16" rx="4" fill={styles[state].fill} stroke={styles[state].stroke} strokeWidth="1.5" />
               <text x="9" y="13" textAnchor="middle" fontSize="10" fontWeight="700" fill={styles[state].text}>{styles[state].symbol}</text>
             </svg>
-            {state === 'Selected' ? 'Selected — your choice' : map.legend[state] ?? state}
+            {t(`seatMap.legend.${state}`)}
           </li>
         ))}
-        <li className="flex items-center gap-1.5"><span aria-hidden="true">♿</span>Accessible seat</li>
+        <li className="flex items-center gap-1.5"><span aria-hidden="true">♿</span>{t('seatMap.accessibleSeat')}</li>
       </ul>
 
       {map.sections.map((section) => {
@@ -47,17 +49,17 @@ export function SeatMap({ map, selected, limit, onToggle }: Props) {
         const width = LABEL + widest * (SIZE + GAP)
         const height = rows.length * (SIZE + GAP)
         return (
-          <section key={section.sectionId} aria-label={`Section ${section.name}`}>
+          <section key={section.sectionId} aria-label={t('seatMap.section', { name: section.name })}>
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-bold">{section.name}</h3>
               <p className="text-xs text-slate-500">
                 {section.ticketTypeName
-                  ? `${section.ticketTypeName} · ${section.price ? formatKzt(section.price) : 'Free'}`
-                  : 'Not on sale'}
+                  ? `${section.ticketTypeName} · ${section.price ? formatKzt(section.price) : t('event.free')}`
+                  : t('seatMap.notOnSale')}
               </p>
             </div>
             <div className="overflow-x-auto rounded-xl bg-slate-50 p-3">
-              <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={`${section.name} seats`}>
+              <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="group" aria-label={t('seatMap.sectionSeats', { name: section.name })}>
                 {rows.map((row, rowIndex) => (
                   <g key={row} transform={`translate(0 ${rowIndex * (SIZE + GAP)})`}>
                     <text x={LABEL - 12} y={SIZE / 2 + 4} textAnchor="end" fontSize="11" fontWeight="600" fill="#64748b">{row}</text>
@@ -78,7 +80,7 @@ export function SeatMap({ map, selected, limit, onToggle }: Props) {
                           tabIndex={selectable ? 0 : -1}
                           aria-pressed={isSelected}
                           aria-disabled={!selectable}
-                          aria-label={`${seatLabel(section.name, seat)}${seat.isAccessible ? ', accessible' : ''}, ${state.toLowerCase()}`}
+                          aria-label={`${t('seatMap.seat', { section: section.name, row: seat.rowLabel, seat: seat.number })}${seat.isAccessible ? `, ${t('seatMap.accessible')}` : ''}, ${t(`seatMap.state.${state}`)}`}
                           onClick={toggle}
                           onKeyDown={onKey}
                           style={{ cursor: selectable ? 'pointer' : 'not-allowed', outlineOffset: 2 }}

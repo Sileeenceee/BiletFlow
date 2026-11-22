@@ -5,18 +5,20 @@ import { Link, useNavigate } from 'react-router'
 import { z } from 'zod'
 import { login, registerAccount } from '../api/auth'
 import { useAuth } from '../lib/auth'
+import { useLocale, type MessageKey } from '../lib/i18n'
 import { Field, buttonClass, inputClass } from '../components/form'
 
 // Password rule matches AuthService.IsValidPassword (>= 8 characters).
+// Messages are translation keys; they are translated where the error is shown.
 const schema = z
   .object({
-    email: z.string().min(1, 'Required').email('Enter a valid email'),
-    password: z.string().min(8, 'At least 8 characters'),
-    confirmPassword: z.string().min(1, 'Required'),
+    email: z.string().min(1, 'form.required').email('form.invalidEmail'),
+    password: z.string().min(8, 'form.minPassword'),
+    confirmPassword: z.string().min(1, 'form.required'),
     createOrganizerProfile: z.boolean(),
   })
   .refine((data) => data.password === data.confirmPassword, {
-    message: 'Passwords do not match',
+    message: 'form.passwordMismatch',
     path: ['confirmPassword'],
   })
 
@@ -26,6 +28,7 @@ export default function Register() {
   const [formError, setFormError] = useState('')
   const [devToken, setDevToken] = useState<string | null>(null)
   const { signIn } = useAuth()
+  const { t } = useLocale()
   const navigate = useNavigate()
 
   const {
@@ -62,24 +65,21 @@ export default function Register() {
 
       navigate('/events', { replace: true })
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Something went wrong')
+      setFormError(err instanceof Error ? err.message : t('form.genericError'))
     }
   }
 
   if (devToken) {
     return (
       <div className="max-w-md space-y-4">
-        <h1 className="text-2xl font-bold">Account created</h1>
-        <p className="text-sm text-gray-600">
-          Email delivery is not configured yet, so the verification token is shown
-          here for the demo.
-        </p>
+        <h1 className="text-2xl font-bold">{t('register.created')}</h1>
+        <p className="text-sm text-gray-600">{t('register.devToken')}</p>
         <code className="block break-all border rounded p-3 text-xs">{devToken}</code>
         <Link
           to={`/verify-email?token=${encodeURIComponent(devToken)}`}
           className={buttonClass + ' inline-block'}
         >
-          Verify email now
+          {t('register.verifyNow')}
         </Link>
       </div>
     )
@@ -87,9 +87,9 @@ export default function Register() {
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-sm space-y-4">
-      <h1 className="text-2xl font-bold">Create account</h1>
+      <h1 className="text-2xl font-bold">{t('nav.register')}</h1>
 
-      <Field id="email" label="Email" error={errors.email?.message}>
+      <Field id="email" label={t('form.email')} error={errors.email && t(errors.email.message as MessageKey)}>
         <input
           id="email"
           type="email"
@@ -99,7 +99,7 @@ export default function Register() {
         />
       </Field>
 
-      <Field id="password" label="Password" error={errors.password?.message}>
+      <Field id="password" label={t('form.password')} error={errors.password && t(errors.password.message as MessageKey)}>
         <input
           id="password"
           type="password"
@@ -111,8 +111,8 @@ export default function Register() {
 
       <Field
         id="confirmPassword"
-        label="Confirm password"
-        error={errors.confirmPassword?.message}
+        label={t('form.confirmPassword')}
+        error={errors.confirmPassword && t(errors.confirmPassword.message as MessageKey)}
       >
         <input
           id="confirmPassword"
@@ -125,7 +125,7 @@ export default function Register() {
 
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" {...register('createOrganizerProfile')} />
-        I want to create and manage events (Organizer)
+        {t('register.organizer')}
       </label>
 
       {formError && (
@@ -135,13 +135,13 @@ export default function Register() {
       )}
 
       <button type="submit" disabled={isSubmitting} className={`${buttonClass} w-full`}>
-        {isSubmitting ? 'Creating…' : 'Create account'}
+        {isSubmitting ? t('register.submitting') : t('nav.register')}
       </button>
 
       <p className="text-sm">
-        Already have an account?{' '}
+        {t('register.haveAccount')}{' '}
         <Link to="/login" className="underline">
-          Sign in
+          {t('nav.signIn')}
         </Link>
       </p>
     </form>

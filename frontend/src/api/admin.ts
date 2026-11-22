@@ -146,15 +146,15 @@ const post = (path: string, body?: unknown) =>
 
 export const getOverview = () => apiFetch<AdminOverview>('/api/admin/overview')
 
-export const getUsers = (search: string, role: string) =>
-  apiFetch<AdminUser[]>(`/api/admin/users${query({ search, role })}`)
+export const getUsers = (search: string, role: string, signal?: AbortSignal) =>
+  apiFetch<AdminUser[]>(`/api/admin/users${query({ search, role })}`, { signal })
 export const suspendUser = (userId: string, reason: string) => post(`/api/admin/users/${userId}/suspend`, { reason })
 export const reinstateUser = (userId: string) => post(`/api/admin/users/${userId}/reinstate`)
 export const changeUserRole = (userId: string, role: string) =>
   apiFetch<AdminUser>(`/api/admin/users/${userId}/role`, { method: 'PUT', body: JSON.stringify({ role }) })
 
-export const getAdminEvents = (search: string, status: string) =>
-  apiFetch<AdminEvent[]>(`/api/admin/events${query({ search, status })}`)
+export const getAdminEvents = (search: string, status: string, signal?: AbortSignal) =>
+  apiFetch<AdminEvent[]>(`/api/admin/events${query({ search, status })}`, { signal })
 export const suspendEvent = (eventId: string, reason: string) => post(`/api/admin/events/${eventId}/suspend`, { reason })
 export const reinstateEvent = (eventId: string) => post(`/api/admin/events/${eventId}/reinstate`)
 export const suspendPaidSales = (eventId: string, reason: string) =>
@@ -162,16 +162,17 @@ export const suspendPaidSales = (eventId: string, reason: string) =>
 export const reinstatePaidSales = (eventId: string) =>
   apiFetch<PaidSalesChecklist>(`/api/admin/events/${eventId}/paid-sales/reinstate`, { method: 'POST' })
 
-export const getReports = (status: string) => apiFetch<EventReport[]>(`/api/admin/reports${query({ status })}`)
+export const getReports = (status: string, signal?: AbortSignal) =>
+  apiFetch<EventReport[]>(`/api/admin/reports${query({ status })}`, { signal })
 export const resolveReport = (
   reportId: string,
   input: { status: 'Dismissed' | 'ActionTaken'; note: string; suspendEvent: boolean },
 ) => apiFetch<EventReport>(`/api/admin/reports/${reportId}`, { method: 'PUT', body: JSON.stringify(input) })
 
-export const getAdminOrders = (search: string, status: string) =>
-  apiFetch<AdminOrder[]>(`/api/admin/orders${query({ search, status })}`)
-export const getPayments = (search: string, status: string) =>
-  apiFetch<AdminPayment[]>(`/api/admin/payments${query({ search, status })}`)
+export const getAdminOrders = (search: string, status: string, signal?: AbortSignal) =>
+  apiFetch<AdminOrder[]>(`/api/admin/orders${query({ search, status })}`, { signal })
+export const getPayments = (search: string, status: string, signal?: AbortSignal) =>
+  apiFetch<AdminPayment[]>(`/api/admin/payments${query({ search, status })}`, { signal })
 export const getRefunds = () => apiFetch<AdminRefund[]>('/api/admin/refunds')
 export const getActivations = () => apiFetch<AdminActivation[]>('/api/admin/paid-sales-activations')
 export const getPromoActivity = () => apiFetch<AdminPromoActivity[]>('/api/admin/promo-activity')

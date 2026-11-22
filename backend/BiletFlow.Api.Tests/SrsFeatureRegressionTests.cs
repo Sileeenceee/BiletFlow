@@ -330,7 +330,7 @@ public sealed class SrsFeatureRegressionTests(ApiFactory factory) : IClassFixtur
             title,
             description = "Integration test event for the finalized BiletFlow backend features.",
             venue = "Integration Hall",
-            city = "Almaty",
+            cityId = 1,
             venueAddress = "Abay Avenue 1",
             timezone = "Asia/Almaty",
             refundPolicy = "Full refunds until the day before the event.",

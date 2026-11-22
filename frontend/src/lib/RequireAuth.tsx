@@ -19,7 +19,7 @@ export function RequireAuth({ children, roles }: Props) {
 
   if (!user) {
     // Remember where they were headed so login can send them back.
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />
   }
 
   if (roles && !roles.includes(user.role)) {

@@ -2,15 +2,21 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { API_BASE_URL } from '../api/client'
 import { checkout, getEvent, getTicketTypes, payOrder, type EventSummary, type Order, type TicketType } from '../api/events'
-import { getCalendarLinks, getQuote, getSeatMap, reportEvent, seatLabel, type CalendarLinks, type Quote, type Seat, type SeatMap as SeatMapData } from '../api/platform'
+import { getCalendarLinks, getQuote, getSeatMap, reportEvent, type CalendarLinks, type Quote, type Seat, type SeatMap as SeatMapData } from '../api/platform'
 import { buttonClass, inputClass } from '../components/form'
 import { SeatMap } from '../components/SeatMap'
 import { useAuth } from '../lib/auth'
 import { formatDateTime, formatKzt } from '../lib/format'
-import { useLocale } from '../lib/i18n'
+import { useLocale, type MessageKey } from '../lib/i18n'
 
 const MAX_SEATS_PER_ORDER = 10
-const reportReasons = ['Misleading information', 'Suspected fraud', 'Prohibited content', 'Other']
+// The English value is what the API stores; only the label is translated.
+const reportReasons: { value: string; label: MessageKey }[] = [
+  { value: 'Misleading information', label: 'event.reason.misleading' },
+  { value: 'Suspected fraud', label: 'event.reason.fraud' },
+  { value: 'Prohibited content', label: 'event.reason.prohibited' },
+  { value: 'Other', label: 'event.reason.other' },
+]
 
 export default function EventDetail() {
   const { eventId = '' } = useParams()
@@ -49,12 +55,12 @@ export default function EventDetail() {
         }
       })
       .catch((err: unknown) => {
-        if (active) setError(err instanceof Error ? err.message : 'Could not load this event.')
+        if (active) setError(err instanceof Error ? err.message : t('event.loadError'))
       })
     // Calendar links are an extra; the page works without them.
     getCalendarLinks(eventId).then((links) => { if (active) setCalendar(links) }).catch(() => undefined)
     return () => { active = false }
-  }, [eventId])
+  }, [eventId, t])
 
   const assigned = seatMap?.seatingMode === 'Assigned'
   const selectedItems = useMemo(() => tickets
@@ -113,7 +119,7 @@ export default function EventDetail() {
       })
       setOrder(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not reserve these tickets.')
+      setError(err instanceof Error ? err.message : t('event.reserveError'))
       // Someone else may have taken a seat in the meantime: show the current map.
       if (assigned) {
         setSeats([])
@@ -131,7 +137,7 @@ export default function EventDetail() {
     try {
       setOrder(await payOrder(order.id, outcome))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment simulation failed.')
+      setError(err instanceof Error ? err.message : t('event.payError'))
     } finally {
       setBusy(false)
     }
@@ -146,14 +152,14 @@ export default function EventDetail() {
       setReportOpen(false)
       setReportMessage(t('event.reportSent'))
     } catch (err) {
-      setReportMessage(err instanceof Error ? err.message : 'Could not send the report.')
+      setReportMessage(err instanceof Error ? err.message : t('event.reportError'))
     }
   }
 
   if (error && !event) {
     return <p role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-rose-700">{error}</p>
   }
-  if (!event) return <p className="text-slate-500">Loading event…</p>
+  if (!event) return <p className="text-slate-500">{t('event.loading')}</p>
 
   if (order) {
     const confirmed = order.status === 'Confirmed'
@@ -218,7 +224,7 @@ export default function EventDetail() {
           {reportMessage && <p role="status" className="mt-3 text-sm text-slate-600">{reportMessage}</p>}
           {reportOpen && (
             <form onSubmit={(form) => void submitReport(form)} className="mt-4 space-y-3 rounded-2xl border border-slate-200 p-4">
-              <label className="block text-sm font-medium">{t('event.reportReason')}<select name="reason" className={`${inputClass} mt-1.5`}>{reportReasons.map((reason) => <option key={reason}>{reason}</option>)}</select></label>
+              <label className="block text-sm font-medium">{t('event.reportReason')}<select name="reason" className={`${inputClass} mt-1.5`}>{reportReasons.map((reason) => <option key={reason.value} value={reason.value}>{t(reason.label)}</option>)}</select></label>
               <label className="block text-sm font-medium">{t('event.reportDetails')}<textarea name="details" rows={3} maxLength={2000} className={`${inputClass} mt-1.5`} /></label>
               <button className={buttonClass}>{t('event.reportSend')}</button>
             </form>
@@ -243,7 +249,7 @@ export default function EventDetail() {
                   <div key={ticket.id} className="rounded-2xl border border-slate-200 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div><h3 className="font-bold">{ticket.name}</h3><p className="mt-1 text-sm text-slate-500">{ticket.description || t('event.remaining', { count: ticket.availableQuantity })}</p><p className="mt-2 font-bold text-slate-900">{ticket.price === 0 ? t('event.free') : formatKzt(ticket.price)}</p></div>
-                      <select aria-label={`Quantity for ${ticket.name}`} disabled={Boolean(unavailable)} value={quantities[ticket.id] ?? 0} onChange={(change) => setQuantities((current) => ({ ...current, [ticket.id]: Number(change.target.value) }))} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm">
+                      <select aria-label={t('event.quantityFor', { name: ticket.name })} disabled={Boolean(unavailable)} value={quantities[ticket.id] ?? 0} onChange={(change) => setQuantities((current) => ({ ...current, [ticket.id]: Number(change.target.value) }))} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm">
                         {Array.from({ length: Math.min(ticket.maxPerOrder, ticket.availableQuantity) + 1 }, (_, quantity) => <option key={quantity} value={quantity}>{quantity}</option>)}
                       </select>
                     </div>
@@ -258,7 +264,7 @@ export default function EventDetail() {
               {assigned && seats.length > 0 && (
                 <div className="rounded-xl bg-slate-50 p-3 text-sm">
                   <p className="font-semibold">{t('event.seatsSelected')}</p>
-                  <ul className="mt-1 space-y-1 text-slate-600">{seats.map((seat) => <li key={seat.seatId} className="flex justify-between gap-3"><span>{seatLabel(seatSection(seat)?.name ?? '', seat)}</span><span>{seatPrice(seat) ? formatKzt(seatPrice(seat)) : t('event.free')}</span></li>)}</ul>
+                  <ul className="mt-1 space-y-1 text-slate-600">{seats.map((seat) => <li key={seat.seatId} className="flex justify-between gap-3"><span>{t('seatMap.seat', { section: seatSection(seat)?.name ?? '', row: seat.rowLabel, seat: seat.number })}</span><span>{seatPrice(seat) ? formatKzt(seatPrice(seat)) : t('event.free')}</span></li>)}</ul>
                 </div>
               )}
               <label className="block text-sm font-medium text-slate-700">{t('event.promo')}

@@ -138,6 +138,119 @@ namespace BiletFlow.Api.Data.EfMigrations
                     b.ToTable("AuthTokens");
                 });
 
+            modelBuilder.Entity("BiletFlow.Api.Models.City", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Cities");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Name = "Almaty"
+                        },
+                        new
+                        {
+                            Id = 2,
+                            Name = "Astana"
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Name = "Shymkent"
+                        },
+                        new
+                        {
+                            Id = 4,
+                            Name = "Karaganda"
+                        },
+                        new
+                        {
+                            Id = 5,
+                            Name = "Aktobe"
+                        },
+                        new
+                        {
+                            Id = 6,
+                            Name = "Taraz"
+                        },
+                        new
+                        {
+                            Id = 7,
+                            Name = "Pavlodar"
+                        },
+                        new
+                        {
+                            Id = 8,
+                            Name = "Ust-Kamenogorsk"
+                        },
+                        new
+                        {
+                            Id = 9,
+                            Name = "Semey"
+                        },
+                        new
+                        {
+                            Id = 10,
+                            Name = "Atyrau"
+                        },
+                        new
+                        {
+                            Id = 11,
+                            Name = "Kostanay"
+                        },
+                        new
+                        {
+                            Id = 12,
+                            Name = "Kyzylorda"
+                        },
+                        new
+                        {
+                            Id = 13,
+                            Name = "Uralsk"
+                        },
+                        new
+                        {
+                            Id = 14,
+                            Name = "Petropavlovsk"
+                        },
+                        new
+                        {
+                            Id = 15,
+                            Name = "Aktau"
+                        },
+                        new
+                        {
+                            Id = 16,
+                            Name = "Turkestan"
+                        },
+                        new
+                        {
+                            Id = 17,
+                            Name = "Taldykorgan"
+                        },
+                        new
+                        {
+                            Id = 18,
+                            Name = "Kokshetau"
+                        });
+                });
+
             modelBuilder.Entity("BiletFlow.Api.Models.Event", b =>
                 {
                     b.Property<Guid>("Id")
@@ -155,6 +268,9 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
+
+                    b.Property<int>("CityId")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -254,6 +370,8 @@ namespace BiletFlow.Api.Data.EfMigrations
                         .HasColumnType("character varying(16)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CityId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
@@ -1175,6 +1293,12 @@ namespace BiletFlow.Api.Data.EfMigrations
 
             modelBuilder.Entity("BiletFlow.Api.Models.Event", b =>
                 {
+                    b.HasOne("BiletFlow.Api.Models.City", null)
+                        .WithMany()
+                        .HasForeignKey("CityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("BiletFlow.Api.Models.AppUser", "Organizer")
                         .WithMany("Events")
                         .HasForeignKey("OrganizerId")

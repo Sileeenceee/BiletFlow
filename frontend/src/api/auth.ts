@@ -139,7 +139,7 @@ export function updateAccount(input: { currentPassword: string; email?: string; 
   emailConfirmed: boolean
   verificationToken: string | null
 }> {
-  return apiFetch('/api/auth/me', { method: 'PUT', body: JSON.stringify(input), redirectOnUnauthorized: false })
+  return apiFetch('/api/auth/me', { method: 'PUT', body: JSON.stringify(input) })
 }
 
 /** DELETE /api/auth/me — 409 when the account still owns events or orders that must be kept. */

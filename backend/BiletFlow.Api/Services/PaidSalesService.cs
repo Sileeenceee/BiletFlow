@@ -2,6 +2,7 @@ using System.Data;
 using BiletFlow.Api.Data;
 using BiletFlow.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace BiletFlow.Api.Services;
 
@@ -62,68 +63,75 @@ public sealed class PaidSalesService(
         if (!request.ConfirmSimulationOnly) return (null, "Confirm that this is a simulation only.", ServiceError.BadRequest);
         if (!request.AcceptTerms) return (null, "The paid-event terms must be accepted.", ServiceError.BadRequest);
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        var ev = await GetManagedEventAsync(eventId, userId, isPlatformAdmin);
-        if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
-        if (ev.IsCancelled) return (null, "A cancelled event cannot activate paid sales.", ServiceError.BadRequest);
-        if (ev.IsSuspended && !isPlatformAdmin) return (null, "This event is suspended by the platform.", ServiceError.BadRequest);
-        if (ev.PaidSalesStatus == PaidSalesStatus.Suspended && !isPlatformAdmin)
+        try
         {
-            return (null, "Paid sales were suspended by a platform administrator and can only be reinstated by one.", ServiceError.BadRequest);
-        }
-        if (!await HasPaidTicketTypeAsync(eventId)) return (null, "Create at least one paid ticket type first.", ServiceError.BadRequest);
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var ev = await GetManagedEventAsync(eventId, userId, isPlatformAdmin);
+            if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
+            if (ev.IsCancelled) return (null, "A cancelled event cannot activate paid sales.", ServiceError.BadRequest);
+            if (ev.IsSuspended && !isPlatformAdmin) return (null, "This event is suspended by the platform.", ServiceError.BadRequest);
+            if (ev.PaidSalesStatus == PaidSalesStatus.Suspended && !isPlatformAdmin)
+            {
+                return (null, "Paid sales were suspended by a platform administrator and can only be reinstated by one.", ServiceError.BadRequest);
+            }
+            if (!await HasPaidTicketTypeAsync(eventId)) return (null, "Create at least one paid ticket type first.", ServiceError.BadRequest);
 
-        var now = DateTimeOffset.UtcNow;
-        var profile = await db.OrganizerProfiles.SingleOrDefaultAsync(candidate => candidate.UserId == ev.OrganizerId);
-        if (profile is null)
+            var now = DateTimeOffset.UtcNow;
+            var profile = await db.OrganizerProfiles.SingleOrDefaultAsync(candidate => candidate.UserId == ev.OrganizerId);
+            if (profile is null)
+            {
+                var organizer = await db.Users.SingleAsync(user => user.Id == ev.OrganizerId);
+                var name = organizer.Email[..organizer.Email.IndexOf('@')];
+                profile = new OrganizerProfile { UserId = organizer.Id, BusinessName = name, DisplayName = name, ContactEmail = organizer.Email };
+                db.OrganizerProfiles.Add(profile);
+            }
+
+            if (!HasPayoutAccount(profile))
+            {
+                // One-step simulation: register a clearly labelled sandbox payout account instead of a real one.
+                profile.SandboxPayoutProvider = "BiletFlow Sandbox (simulation)";
+                profile.SandboxPayoutReference = $"SANDBOX-{ev.OrganizerId.ToString("N")[..12].ToUpperInvariant()}";
+                profile.UpdatedAt = now;
+            }
+
+            if (!profile.IsVerified)
+            {
+                profile.IsVerified = true;
+                profile.UpdatedAt = now;
+                audit.Add(AuditActionType.OrganizerVerified, nameof(OrganizerProfile), profile.Id, ev.Id, userId,
+                    "Organizer identity and payout verification completed (simulation).");
+            }
+
+            var activation = await GetOrCreateActivationAsync(ev);
+            RecordFee(activation, ev, userId, (await platformSettings.GetAsync()).ActivationFeeKzt);
+            if (activation.TermsAcceptedAt is null)
+            {
+                activation.TermsAcceptedAt = now;
+                audit.Add(AuditActionType.PaidSalesTermsAccepted, nameof(PaidSalesActivation), activation.Id, ev.Id, userId,
+                    "Paid-event terms accepted.");
+            }
+
+            var wasActive = ev.PaidSalesStatus == PaidSalesStatus.Active;
+            ev.PaidTermsAccepted = true;
+            ev.PaidSalesStatus = PaidSalesStatus.Active;
+            ev.UpdatedAt = now;
+            activation.ActivatedAt ??= now;
+            if (!wasActive)
+            {
+                audit.Add(AuditActionType.PaidSalesActivated, nameof(Event), ev.Id, ev.Id, userId, "Paid sales activated (simulation).");
+                notifications.Notify(ev.OrganizerId, "PaidSales", $"Paid sales active: {ev.Title}",
+                    $"Paid ticket sales are now active for {ev.Title}. Payouts are simulated; estimated payouts are shown in your event analytics.",
+                    ev.Id, email: profile.ContactEmail);
+            }
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (await BuildChecklistAsync(ev), null, ServiceError.None);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
         {
-            var organizer = await db.Users.SingleAsync(user => user.Id == ev.OrganizerId);
-            var name = organizer.Email[..organizer.Email.IndexOf('@')];
-            profile = new OrganizerProfile { UserId = organizer.Id, BusinessName = name, DisplayName = name, ContactEmail = organizer.Email };
-            db.OrganizerProfiles.Add(profile);
+            return (null, "Event changed while activating paid sales. Please retry.", ServiceError.Conflict);
         }
-
-        if (!HasPayoutAccount(profile))
-        {
-            // One-step simulation: register a clearly labelled sandbox payout account instead of a real one.
-            profile.SandboxPayoutProvider = "BiletFlow Sandbox (simulation)";
-            profile.SandboxPayoutReference = $"SANDBOX-{ev.OrganizerId.ToString("N")[..12].ToUpperInvariant()}";
-            profile.UpdatedAt = now;
-        }
-
-        if (!profile.IsVerified)
-        {
-            profile.IsVerified = true;
-            profile.UpdatedAt = now;
-            audit.Add(AuditActionType.OrganizerVerified, nameof(OrganizerProfile), profile.Id, ev.Id, userId,
-                "Organizer identity and payout verification completed (simulation).");
-        }
-
-        var activation = await GetOrCreateActivationAsync(ev);
-        RecordFee(activation, ev, userId, (await platformSettings.GetAsync()).ActivationFeeKzt);
-        if (activation.TermsAcceptedAt is null)
-        {
-            activation.TermsAcceptedAt = now;
-            audit.Add(AuditActionType.PaidSalesTermsAccepted, nameof(PaidSalesActivation), activation.Id, ev.Id, userId,
-                "Paid-event terms accepted.");
-        }
-
-        var wasActive = ev.PaidSalesStatus == PaidSalesStatus.Active;
-        ev.PaidTermsAccepted = true;
-        ev.PaidSalesStatus = PaidSalesStatus.Active;
-        ev.UpdatedAt = now;
-        activation.ActivatedAt ??= now;
-        if (!wasActive)
-        {
-            audit.Add(AuditActionType.PaidSalesActivated, nameof(Event), ev.Id, ev.Id, userId, "Paid sales activated (simulation).");
-            notifications.Notify(ev.OrganizerId, "PaidSales", $"Paid sales active: {ev.Title}",
-                $"Paid ticket sales are now active for {ev.Title}. Payouts are simulated; estimated payouts are shown in your event analytics.",
-                ev.Id, email: profile.ContactEmail);
-        }
-
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return (await BuildChecklistAsync(ev), null, ServiceError.None);
     }
 
     public async Task<bool> SuspendAsync(Guid adminId, Guid eventId, string? reason)
@@ -214,4 +222,8 @@ public sealed class PaidSalesService(
 
     private static string FormatReason(string? reason) =>
         string.IsNullOrWhiteSpace(reason) ? string.Empty : $" (reason: {reason.Trim()})";
+
+    private static bool IsSerializationConflict(Exception exception) =>
+        exception is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.UniqueViolation } ||
+        (exception.InnerException is not null && IsSerializationConflict(exception.InnerException));
 }

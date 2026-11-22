@@ -5,11 +5,13 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { z } from 'zod'
 import { login } from '../api/auth'
 import { useAuth } from '../lib/auth'
+import { useLocale, type MessageKey } from '../lib/i18n'
 import { Field, buttonClass, inputClass } from '../components/form'
 
+// Messages are translation keys; they are translated where the error is shown.
 const schema = z.object({
-  email: z.string().min(1, 'Required').email('Enter a valid email'),
-  password: z.string().min(1, 'Required'),
+  email: z.string().min(1, 'form.required').email('form.invalidEmail'),
+  password: z.string().min(1, 'form.required'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -17,6 +19,7 @@ type FormValues = z.infer<typeof schema>
 export default function Login() {
   const [formError, setFormError] = useState('')
   const { signIn } = useAuth()
+  const { t } = useLocale()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -32,17 +35,18 @@ export default function Login() {
       const session = await login(values.email, values.password)
       signIn(session)
       const from = (location.state as { from?: string } | null)?.from
-      navigate(from ?? '/events', { replace: true })
+      const target = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : '/events'
+      navigate(target, { replace: true })
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Something went wrong')
+      setFormError(err instanceof Error ? err.message : t('form.genericError'))
     }
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-sm space-y-4">
-      <h1 className="text-2xl font-bold">Sign in</h1>
+      <h1 className="text-2xl font-bold">{t('nav.signIn')}</h1>
 
-      <Field id="email" label="Email" error={errors.email?.message}>
+      <Field id="email" label={t('form.email')} error={errors.email && t(errors.email.message as MessageKey)}>
         <input
           id="email"
           type="email"
@@ -52,7 +56,7 @@ export default function Login() {
         />
       </Field>
 
-      <Field id="password" label="Password" error={errors.password?.message}>
+      <Field id="password" label={t('form.password')} error={errors.password && t(errors.password.message as MessageKey)}>
         <input
           id="password"
           type="password"
@@ -69,15 +73,15 @@ export default function Login() {
       )}
 
       <button type="submit" disabled={isSubmitting} className={`${buttonClass} w-full`}>
-        {isSubmitting ? 'Signing in…' : 'Sign in'}
+        {isSubmitting ? t('login.submitting') : t('nav.signIn')}
       </button>
 
       <div className="flex justify-between text-sm">
         <Link to="/register" className="underline">
-          Create an account
+          {t('login.createAccount')}
         </Link>
         <Link to="/forgot-password" className="underline">
-          Forgot password?
+          {t('login.forgot')}
         </Link>
       </div>
     </form>

@@ -26,7 +26,7 @@ export async function apiFetch<T>(path: string, options: Options = {}): Promise<
   let res = await send(path, init)
   if (res.status === 401 && redirectOnUnauthorized && (await refreshSession())) res = await send(path, init)
 
-  await assertSuccess(res, redirectOnUnauthorized)
+  await assertSuccess(res, redirectOnUnauthorized, path)
 
   return (await readBody<T>(res)) as T
 }
@@ -34,7 +34,7 @@ export async function apiFetch<T>(path: string, options: Options = {}): Promise<
 export async function apiBlob(path: string): Promise<Blob> {
   let res = await send(path)
   if (res.status === 401 && (await refreshSession())) res = await send(path)
-  await assertSuccess(res, true)
+  await assertSuccess(res, true, path)
   return res.blob()
 }
 
@@ -79,14 +79,14 @@ async function send(path: string, init: RequestInit = {}): Promise<Response> {
   })
 }
 
-async function assertSuccess(res: Response, redirectOnUnauthorized: boolean) {
+async function assertSuccess(res: Response, redirectOnUnauthorized: boolean, path: string) {
   if (res.status === 401 && redirectOnUnauthorized) {
     clearSession()
     window.location.href = '/login'
     throw new ApiError(401, 'Your session expired. Sign in again.')
   }
 
-  if (!res.ok) throw new ApiError(res.status, await readErrorMessage(res))
+  if (!res.ok) throw new ApiError(res.status, await readErrorMessage(res, path))
 }
 
 /**
@@ -94,8 +94,8 @@ async function assertSuccess(res: Response, redirectOnUnauthorized: boolean) {
  * (title/detail) is also handled for endpoints that use the default
  * ASP.NET Core validation response.
  */
-async function readErrorMessage(res: Response): Promise<string> {
-  if (res.status === 401) return 'Invalid email or password'
+async function readErrorMessage(res: Response, path: string): Promise<string> {
+  if (res.status === 401 && path === '/api/auth/login') return 'Invalid email or password'
 
   try {
     const body = await res.json()

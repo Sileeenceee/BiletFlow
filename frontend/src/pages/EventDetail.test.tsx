@@ -19,7 +19,6 @@ vi.mock('../api/platform', () => ({
   getQuote: vi.fn(),
   getSeatMap: vi.fn(),
   reportEvent: vi.fn(),
-  seatLabel: vi.fn(),
 }))
 
 const event = {
@@ -28,6 +27,7 @@ const event = {
   description: 'Live music under the stars.',
   venue: 'Central Park',
   city: 'Almaty',
+  cityId: 1,
   startDateUtc: '2030-06-01T18:00:00.000Z',
   endDateUtc: '2030-06-01T21:00:00.000Z',
   isPublished: true,

@@ -264,6 +264,9 @@ public sealed class AuthService(AuthDbContext db, IPasswordHasher<AppUser> passw
     private static string CreateRawToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
     private static string HashToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
-    private static bool IsValidEmail(string email) => email.Contains('@') && email.Length <= 320;
+    private static bool IsValidEmail(string email) =>
+        email.Length <= 320 &&
+        System.Net.Mail.MailAddress.TryCreate(email, out var address) &&
+        string.Equals(address.Address, email, StringComparison.OrdinalIgnoreCase);
     private static bool IsValidPassword(string password) => !string.IsNullOrWhiteSpace(password) && password.Length >= 8;
 }

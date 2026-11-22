@@ -73,6 +73,13 @@ public sealed class OrganizerProfile
     public DateTimeOffset? UpdatedAt { get; set; }
 }
 
+/// <summary>Directory of cities an event can take place in.</summary>
+public sealed class City
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
 public sealed class Event
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -83,6 +90,9 @@ public sealed class Event
     public string Slug { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Venue { get; set; } = string.Empty;
+    /// <summary>Reference to the city directory; the source of truth for the event city.</summary>
+    public int CityId { get; set; }
+    /// <summary>Copy of Cities.Name taken by the server on save, so readers (PDF, .ics, CSV, filters) need no join.</summary>
     public string City { get; set; } = string.Empty;
     public string VenueAddress { get; set; } = string.Empty;
     /// <summary>Venue layout for events with assigned seating; null for general admission.</summary>

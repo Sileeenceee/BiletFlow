@@ -3,11 +3,13 @@ import { Link, useSearchParams } from 'react-router'
 import { getCurrentUser, verifyEmail } from '../api/auth'
 import { buttonClass, inputClass } from '../components/form'
 import { useAuth } from '../lib/auth'
+import { useLocale } from '../lib/i18n'
 
 type Status = 'idle' | 'working' | 'done' | 'failed'
 
 export default function VerifyEmail() {
   const { user, updateUser } = useAuth()
+  const { t } = useLocale()
   const [params] = useSearchParams()
   const [token, setToken] = useState(params.get('token') ?? '')
   const [status, setStatus] = useState<Status>('idle')
@@ -36,7 +38,7 @@ export default function VerifyEmail() {
       setStatus('done')
       await syncEmailConfirmed()
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Verification failed')
+      setMessage(err instanceof Error ? err.message : t('verify.failed'))
       setStatus('failed')
     }
   }
@@ -53,7 +55,7 @@ export default function VerifyEmail() {
 
   return (
     <div className="max-w-md space-y-4">
-      <h1 className="text-2xl font-bold">Verify email</h1>
+      <h1 className="text-2xl font-bold">{t('verify.title')}</h1>
 
       {status === 'done' ? (
         <>
@@ -61,13 +63,13 @@ export default function VerifyEmail() {
             {message}
           </p>
           <Link to="/events" className="underline">
-            Continue
+            {t('verify.continue')}
           </Link>
         </>
       ) : (
         <>
           <label htmlFor="token" className="block text-sm mb-1">
-            Verification token
+            {t('verify.token')}
           </label>
           <input
             id="token"
@@ -87,7 +89,7 @@ export default function VerifyEmail() {
             disabled={status === 'working'}
             className={buttonClass}
           >
-            {status === 'working' ? 'Verifying…' : 'Verify'}
+            {status === 'working' ? t('verify.submitting') : t('verify.submit')}
           </button>
         </>
       )}

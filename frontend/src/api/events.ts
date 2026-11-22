@@ -6,6 +6,7 @@ export type EventSummary = {
   description: string
   venue: string
   city: string
+  cityId: number
   startDateUtc: string
   endDateUtc: string
   isPublished: boolean
@@ -30,7 +31,8 @@ export type CreateEventInput = {
   title: string
   description: string
   venue: string
-  city: string
+  /** Id from GET /api/cities; the backend rejects unknown ids with 400. */
+  cityId: number
   startDateUtc: string
   endDateUtc: string
   isPublished: boolean
@@ -44,6 +46,8 @@ export type CreateEventInput = {
   timezone?: string | null
   refundPolicy?: string | null
 }
+
+export type City = { id: number; name: string }
 
 export type TicketType = {
   id: string
@@ -138,6 +142,10 @@ export type Attendee = {
   attendeeEmail: string
   ticketTypeName: string
   status: string
+}
+
+export function getCities(): Promise<City[]> {
+  return apiFetch<City[]>('/api/cities')
 }
 
 export function getEvents(organizer: boolean): Promise<EventSummary[]> {

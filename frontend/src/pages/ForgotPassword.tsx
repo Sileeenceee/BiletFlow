@@ -5,9 +5,11 @@ import { Link } from 'react-router'
 import { z } from 'zod'
 import { forgotPassword } from '../api/auth'
 import { Field, buttonClass, inputClass } from '../components/form'
+import { useLocale, type MessageKey } from '../lib/i18n'
 
+// Messages are translation keys; they are translated where the error is shown.
 const schema = z.object({
-  email: z.string().min(1, 'Required').email('Enter a valid email'),
+  email: z.string().min(1, 'form.required').email('form.invalidEmail'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -16,6 +18,7 @@ export default function ForgotPassword() {
   const [message, setMessage] = useState('')
   const [devToken, setDevToken] = useState<string | null>(null)
   const [formError, setFormError] = useState('')
+  const { t } = useLocale()
 
   const {
     register,
@@ -32,15 +35,15 @@ export default function ForgotPassword() {
       setMessage(res.message)
       setDevToken(res.resetToken)
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Something went wrong')
+      setFormError(err instanceof Error ? err.message : t('form.genericError'))
     }
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-md space-y-4">
-      <h1 className="text-2xl font-bold">Reset your password</h1>
+      <h1 className="text-2xl font-bold">{t('forgot.title')}</h1>
 
-      <Field id="email" label="Email" error={errors.email?.message}>
+      <Field id="email" label={t('form.email')} error={errors.email && t(errors.email.message as MessageKey)}>
         <input
           id="email"
           type="email"
@@ -57,7 +60,7 @@ export default function ForgotPassword() {
       )}
 
       <button type="submit" disabled={isSubmitting} className={buttonClass}>
-        {isSubmitting ? 'Sending…' : 'Send reset instructions'}
+        {isSubmitting ? t('forgot.submitting') : t('forgot.submit')}
       </button>
 
       {message && (
@@ -68,23 +71,20 @@ export default function ForgotPassword() {
 
       {devToken && (
         <div className="space-y-2">
-          <p className="text-sm text-gray-600">
-            Development only — the reset token is shown here because no email
-            provider is configured.
-          </p>
+          <p className="text-sm text-gray-600">{t('forgot.devToken')}</p>
           <code className="block break-all border rounded p-3 text-xs">{devToken}</code>
           <Link
             to={`/reset-password?token=${encodeURIComponent(devToken)}`}
             className="underline text-sm"
           >
-            Continue to reset
+            {t('forgot.continue')}
           </Link>
         </div>
       )}
 
       <p className="text-sm">
         <Link to="/login" className="underline">
-          Back to sign in
+          {t('form.backToSignIn')}
         </Link>
       </p>
     </form>
