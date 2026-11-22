@@ -33,7 +33,7 @@ describe('Login', () => {
 		const user = userEvent.setup()
 		renderLogin()
 
-		await user.click(screen.getByRole('button', { name: 'Sign in' }))
+		await user.click(screen.getByRole('button', { name: 'Log in' }))
 
 		expect(screen.getAllByText('Required')).toHaveLength(2)
 		expect(login).not.toHaveBeenCalled()
@@ -55,7 +55,7 @@ describe('Login', () => {
 
 		await user.type(screen.getByLabelText('Email'), 'attendee@example.com')
 		await user.type(screen.getByLabelText('Password'), 'password123')
-		await user.click(screen.getByRole('button', { name: 'Sign in' }))
+		await user.click(screen.getByRole('button', { name: 'Log in' }))
 
 		expect(await screen.findByRole('heading', { name: 'Events' })).toBeInTheDocument()
 		expect(localStorage.getItem('biletflow.session')).toContain('test-token')
@@ -68,9 +68,9 @@ describe('Login', () => {
 
 		await user.type(screen.getByLabelText('Email'), 'attendee@example.com')
 		await user.type(screen.getByLabelText('Password'), 'wrongpass')
-		await user.click(screen.getByRole('button', { name: 'Sign in' }))
+		await user.click(screen.getByRole('button', { name: 'Log in' }))
 
 		expect(await screen.findByRole('alert')).toHaveTextContent('Invalid email or password')
-		expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+		expect(screen.getByRole('heading', { name: 'Log in' })).toBeInTheDocument()
 	})
 })
