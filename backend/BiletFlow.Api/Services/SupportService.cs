@@ -324,19 +324,19 @@ public sealed class SupportService(AuthDbContext db, AuditService audit, Notific
     private async Task NotifyOtherParticipantsAsync(SupportCase supportCase, Guid senderId, string title, string message)
     {
         var recipients = new HashSet<Guid> { supportCase.RequesterUserId };
-        if (supportCase.Type == SupportCaseType.Organizer)
+        if (supportCase.AssignedToUserId is not null)
         {
-            var admins = await db.Users.Where(user => user.Role == UserRole.PlatformAdmin && !user.IsSuspended)
-                .Select(user => user.Id).ToListAsync();
-            recipients.UnionWith(admins);
+            recipients.Add(supportCase.AssignedToUserId.Value);
         }
-        else if (supportCase.EventId is not null)
+
+        if (supportCase.Type != SupportCaseType.Organizer && supportCase.EventId is not null)
         {
             var organizerId = await db.Events.Where(ev => ev.Id == supportCase.EventId)
                 .Select(ev => (Guid?)ev.OrganizerId).SingleOrDefaultAsync();
             if (organizerId is not null) recipients.Add(organizerId.Value);
         }
-        else
+
+        if (supportCase.IsEscalated || supportCase.Type == SupportCaseType.Organizer || supportCase.EventId is null)
         {
             var admins = await db.Users.Where(user => user.Role == UserRole.PlatformAdmin && !user.IsSuspended)
                 .Select(user => user.Id).ToListAsync();

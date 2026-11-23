@@ -158,6 +158,10 @@ public sealed class TicketingService(
             {
                 return (false, "Remove this ticket type from its promo campaigns before deleting it.");
             }
+            if (await db.TicketTypeSections.AnyAsync(link => link.TicketTypeId == ticketTypeId))
+            {
+                return (false, "Remove this ticket type from the seating layout before deleting it.");
+            }
 
             db.TicketTypes.Remove(ticketType);
             audit.Add(AuditActionType.TicketTypeDeleted, nameof(TicketType), ticketType.Id, eventId, organizerId,

@@ -1,6 +1,8 @@
+using System.Data;
 using BiletFlow.Api.Data;
 using BiletFlow.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace BiletFlow.Api.Services;
 
@@ -51,76 +53,90 @@ public sealed class SeatingService(AuthDbContext db, AuditService audit)
     public async Task<(SeatMapResponse? SeatMap, string? Error, ServiceError Kind)> ConfigureAsync(
         Guid eventId, Guid actorId, bool isPlatformAdmin, ConfigureSeatingRequest request)
     {
-        var ev = await db.Events.SingleOrDefaultAsync(candidate =>
-            candidate.Id == eventId && (candidate.OrganizerId == actorId || isPlatformAdmin));
-        if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
-        if (ev.IsCancelled) return (null, "A cancelled event cannot be changed.", ServiceError.BadRequest);
         if (!Enum.TryParse<SeatingMode>(request.SeatingMode, true, out var mode) || !Enum.IsDefined(mode))
         {
             return (null, "Seating mode must be General or Assigned.", ServiceError.BadRequest);
         }
-        if (await db.Orders.AnyAsync(order => order.EventId == eventId))
-        {
-            return (null, "Seating cannot be changed after orders exist for the event.", ServiceError.Conflict);
-        }
 
-        var existingLinks = await db.TicketTypeSections.Where(link => link.EventId == eventId).ToListAsync();
-        db.TicketTypeSections.RemoveRange(existingLinks);
-
-        if (mode == SeatingMode.General)
+        try
         {
-            ev.SeatingMode = SeatingMode.General;
-            ev.VenueId = null;
-        }
-        else
-        {
-            if (request.VenueId is null) return (null, "Select a predefined venue layout.", ServiceError.BadRequest);
-            var venue = await db.Venues.Include(candidate => candidate.Sections).ThenInclude(section => section.Seats)
-                .SingleOrDefaultAsync(candidate => candidate.Id == request.VenueId);
-            if (venue is null) return (null, "Venue layout not found.", ServiceError.BadRequest);
-            if (request.Sections.Count == 0) return (null, "Assign a ticket type to at least one section.", ServiceError.BadRequest);
-            if (request.Sections.Select(row => row.SectionId).Distinct().Count() != request.Sections.Count)
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var ev = await db.Events.SingleOrDefaultAsync(candidate =>
+                candidate.Id == eventId && (candidate.OrganizerId == actorId || isPlatformAdmin));
+            if (ev is null) return (null, "Event not found.", ServiceError.NotFound);
+            if (ev.IsCancelled) return (null, "A cancelled event cannot be changed.", ServiceError.BadRequest);
+            if (await db.Orders.AnyAsync(order => order.EventId == eventId))
             {
-                return (null, "Each section can be assigned to only one ticket type.", ServiceError.BadRequest);
+                return (null, "Seating cannot be changed after orders exist for the event.", ServiceError.Conflict);
             }
 
-            var sections = venue.Sections.ToDictionary(section => section.Id);
-            var ticketTypes = await db.TicketTypes.Where(ticketType => ticketType.EventId == eventId)
-                .ToDictionaryAsync(ticketType => ticketType.Id);
-            if (request.Sections.Any(row => !sections.ContainsKey(row.SectionId)))
-            {
-                return (null, "Every section must belong to the selected venue.", ServiceError.BadRequest);
-            }
-            if (request.Sections.Any(row => !ticketTypes.ContainsKey(row.TicketTypeId)))
-            {
-                return (null, "Every ticket type must belong to this event.", ServiceError.BadRequest);
-            }
+            var existingLinks = await db.TicketTypeSections.Where(link => link.EventId == eventId).ToListAsync();
+            db.TicketTypeSections.RemoveRange(existingLinks);
 
-            foreach (var row in request.Sections)
+            if (mode == SeatingMode.General)
             {
-                db.TicketTypeSections.Add(new TicketTypeSection
+                ev.SeatingMode = SeatingMode.General;
+                ev.VenueId = null;
+            }
+            else
+            {
+                if (request.VenueId is null) return (null, "Select a predefined venue layout.", ServiceError.BadRequest);
+                var venue = await db.Venues.Include(candidate => candidate.Sections).ThenInclude(section => section.Seats)
+                    .SingleOrDefaultAsync(candidate => candidate.Id == request.VenueId);
+                if (venue is null) return (null, "Venue layout not found.", ServiceError.BadRequest);
+                if (request.Sections.Count == 0) return (null, "Assign a ticket type to at least one section.", ServiceError.BadRequest);
+                if (request.Sections.Select(row => row.SectionId).Distinct().Count() != request.Sections.Count)
                 {
-                    EventId = eventId, SectionId = row.SectionId, TicketTypeId = row.TicketTypeId
-                });
+                    return (null, "Each section can be assigned to only one ticket type.", ServiceError.BadRequest);
+                }
+
+                var sections = venue.Sections.ToDictionary(section => section.Id);
+                var ticketTypes = await db.TicketTypes.Where(ticketType => ticketType.EventId == eventId)
+                    .ToDictionaryAsync(ticketType => ticketType.Id);
+                if (request.Sections.Any(row => !sections.ContainsKey(row.SectionId)))
+                {
+                    return (null, "Every section must belong to the selected venue.", ServiceError.BadRequest);
+                }
+                if (request.Sections.Any(row => !ticketTypes.ContainsKey(row.TicketTypeId)))
+                {
+                    return (null, "Every ticket type must belong to this event.", ServiceError.BadRequest);
+                }
+
+                foreach (var row in request.Sections)
+                {
+                    db.TicketTypeSections.Add(new TicketTypeSection
+                    {
+                        EventId = eventId, SectionId = row.SectionId, TicketTypeId = row.TicketTypeId
+                    });
+                }
+
+                // A seated ticket type sells exactly the seats of its sections.
+                foreach (var group in request.Sections.GroupBy(row => row.TicketTypeId))
+                {
+                    ticketTypes[group.Key].Quantity = group.Sum(row => sections[row.SectionId].Seats.Count);
+                }
+
+                ev.SeatingMode = SeatingMode.Assigned;
+                ev.VenueId = venue.Id;
+                if (string.IsNullOrWhiteSpace(ev.VenueAddress)) ev.VenueAddress = venue.Address;
             }
 
-            // A seated ticket type sells exactly the seats of its sections.
-            foreach (var group in request.Sections.GroupBy(row => row.TicketTypeId))
-            {
-                ticketTypes[group.Key].Quantity = group.Sum(row => sections[row.SectionId].Seats.Count);
-            }
-
-            ev.SeatingMode = SeatingMode.Assigned;
-            ev.VenueId = venue.Id;
-            if (string.IsNullOrWhiteSpace(ev.VenueAddress)) ev.VenueAddress = venue.Address;
+            ev.UpdatedAt = DateTimeOffset.UtcNow;
+            audit.Add(AuditActionType.SeatingConfigured, nameof(Event), ev.Id, ev.Id, actorId,
+                mode == SeatingMode.General ? "Event switched to general admission." : "Assigned-seating layout configured.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (await BuildSeatMapAsync(ev), null, ServiceError.None);
         }
-
-        ev.UpdatedAt = DateTimeOffset.UtcNow;
-        audit.Add(AuditActionType.SeatingConfigured, nameof(Event), ev.Id, ev.Id, actorId,
-            mode == SeatingMode.General ? "Event switched to general admission." : "Assigned-seating layout configured.");
-        await db.SaveChangesAsync();
-        return (await BuildSeatMapAsync(ev), null, ServiceError.None);
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (null, "Seating configuration conflicted with another update. Please try again.", ServiceError.Conflict);
+        }
     }
+
+    private static bool IsSerializationConflict(Exception exception) =>
+        exception is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.UniqueViolation } ||
+        (exception.InnerException is not null && IsSerializationConflict(exception.InnerException));
 
     public async Task<SeatMapResponse?> GetSeatMapAsync(Guid eventId, Guid? requesterId, bool isPlatformAdmin)
     {

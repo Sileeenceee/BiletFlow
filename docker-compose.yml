@@ -32,9 +32,12 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=biletflow;Username=biletflow;Password=biletflow123
       PublicAppBaseUrl: http://localhost:8080
-      Email__SmtpHost: mailpit
-      Email__SmtpPort: "1025"
-      Email__From: "BiletFlow <no-reply@biletflow.local>"
+      Email__SmtpHost: ${EMAIL_SMTP_HOST:-mailpit}
+      Email__SmtpPort: ${EMAIL_SMTP_PORT:-1025}
+      Email__EnableSsl: ${EMAIL_ENABLE_SSL:-false}
+      Email__Username: ${EMAIL_USERNAME:-}
+      Email__Password: ${EMAIL_PASSWORD:-}
+      Email__From: ${EMAIL_FROM:-BiletFlow <no-reply@biletflow.local>}
       ASPNETCORE_URLS: http://+:6767;https://+:6969
       ASPNETCORE_Kestrel__Certificates__Default__Path: /https/devcert.pfx
       ASPNETCORE_Kestrel__Certificates__Default__Password: changeit

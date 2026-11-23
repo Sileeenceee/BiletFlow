@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { API_BASE_URL } from '../api/client'
+import { apiBlob } from '../api/client'
 import { checkout, getEvent, getTicketTypes, payOrder, type EventSummary, type Order, type TicketType } from '../api/events'
 import { getCalendarLinks, getQuote, getSeatMap, reportEvent, type CalendarLinks, type Quote, type Seat, type SeatMap as SeatMapData } from '../api/platform'
 import { buttonClass, inputClass } from '../components/form'
 import { SeatMap } from '../components/SeatMap'
 import { useAuth } from '../lib/auth'
-import { formatDateTime, formatKzt } from '../lib/format'
+import { formatDateTime, formatKzt, saveBlob } from '../lib/format'
 import { useLocale, type MessageKey } from '../lib/i18n'
 
 const MAX_SEATS_PER_ORDER = 10
@@ -39,6 +39,7 @@ export default function EventDetail() {
   const [order, setOrder] = useState<Order | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [seatMapError, setSeatMapError] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
   const [reportMessage, setReportMessage] = useState('')
 
@@ -51,7 +52,15 @@ export default function EventDetail() {
         setTickets(ticketTypes)
         // The seat map only exists for assigned-seating events.
         if (eventInfo.seatingMode === 'Assigned') {
-          getSeatMap(eventId).then((map) => { if (active) setSeatMap(map) }).catch(() => undefined)
+          setSeatMapError('')
+          getSeatMap(eventId)
+            .then((map) => { if (active) setSeatMap(map) })
+            .catch((err: unknown) => {
+              if (!active) return
+              const message = err instanceof Error ? err.message : t('event.loadError')
+              setSeatMapError(message)
+              setError(message)
+            })
         }
       })
       .catch((err: unknown) => {
@@ -62,7 +71,8 @@ export default function EventDetail() {
     return () => { active = false }
   }, [eventId, t])
 
-  const assigned = seatMap?.seatingMode === 'Assigned'
+  const isAssignedMode = event?.seatingMode === 'Assigned'
+  const assigned = isAssignedMode && seatMap?.seatingMode === 'Assigned'
   const selectedItems = useMemo(() => tickets
     .filter((ticket) => (quantities[ticket.id] ?? 0) > 0)
     .map((ticket) => ({ ticketTypeId: ticket.id, quantity: quantities[ticket.id] })), [quantities, tickets])
@@ -186,7 +196,7 @@ export default function EventDetail() {
         ) : (
           <div className="flex flex-wrap items-center gap-3">
             <Link to="/orders" className={buttonClass}>{t('event.goToTickets')}</Link>
-            {confirmed && calendar && <CalendarOptions links={calendar} label={t('event.ics')} />}
+            {confirmed && calendar && <CalendarOptions links={calendar} label={t('event.ics')} onError={setError} fallbackError={t('event.loadError')} />}
           </div>
         )}
         {error && <p role="alert" className="mt-4 text-sm text-rose-700">{error}</p>}
@@ -217,7 +227,7 @@ export default function EventDetail() {
           {event.refundPolicy && <><h2 className="mt-8 text-lg font-bold">{t('event.refundPolicy')}</h2><p className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-600">{event.refundPolicy}</p></>}
 
           <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-6">
-            {calendar && <><span className="text-sm font-semibold text-slate-700">{t('event.calendar')}:</span><CalendarOptions links={calendar} label={t('event.ics')} /></>}
+            {calendar && <><span className="text-sm font-semibold text-slate-700">{t('event.calendar')}:</span><CalendarOptions links={calendar} label={t('event.ics')} onError={setError} fallbackError={t('event.loadError')} /></>}
             {user && <Link to={`/support?eventId=${event.id}&new=1`} className="ml-auto text-sm font-semibold text-indigo-700 hover:underline">{t('event.help')}</Link>}
             {user && <button onClick={() => setReportOpen((open) => !open)} className="text-sm font-semibold text-slate-500 hover:underline">{t('event.report')}</button>}
           </div>
@@ -234,13 +244,19 @@ export default function EventDetail() {
 
       <aside className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <p className="text-sm font-semibold text-indigo-600">{t('event.makeItYours')}</p>
-        <h2 className="mt-1 text-xl font-bold">{assigned ? t('event.chooseSeats') : t('event.chooseTickets')}</h2>
+        <h2 className="mt-1 text-xl font-bold">{isAssignedMode ? t('event.chooseSeats') : t('event.chooseTickets')}</h2>
         <div className={assigned ? 'mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]' : ''}>
-          {assigned && seatMap ? (
-            <div>
-              <p className="mb-4 text-xs text-slate-500">{t('event.seatsHint', { minutes: seatMap.holdMinutes })}</p>
-              <SeatMap map={seatMap} selected={seatIds} limit={MAX_SEATS_PER_ORDER} onToggle={toggleSeat} />
-            </div>
+          {isAssignedMode ? (
+            seatMap ? (
+              <div>
+                <p className="mb-4 text-xs text-slate-500">{t('event.seatsHint', { minutes: seatMap.holdMinutes })}</p>
+                <SeatMap map={seatMap} selected={seatIds} limit={MAX_SEATS_PER_ORDER} onToggle={toggleSeat} />
+              </div>
+            ) : (
+              <p role={seatMapError ? 'alert' : undefined} className={`mt-5 rounded-xl p-4 text-sm ${seatMapError ? 'bg-rose-50 text-rose-700' : 'bg-slate-50 text-slate-500'}`}>
+                {seatMapError || t('events.loading')}
+              </p>
+            )
           ) : tickets.length === 0 ? <p className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{t('event.noTickets')}</p> : (
             <div className="mt-5 space-y-3">
               {tickets.map((ticket) => {
@@ -302,11 +318,26 @@ export default function EventDetail() {
 }
 
 /** One-click calendar options; none of them needs write access to the attendee's calendar (SRS 4.11). */
-function CalendarOptions({ links, label }: { links: CalendarLinks; label: string }) {
+function CalendarOptions({
+  links, label, onError, fallbackError,
+}: {
+  links: CalendarLinks
+  label: string
+  onError: (message: string) => void
+  fallbackError: string
+}) {
   const linkClass = 'rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50'
   return (
     <>
-      <a href={`${API_BASE_URL}${links.icsUrl}`} download className={linkClass}>{label}</a>
+      <button
+        type="button"
+        onClick={() => void apiBlob(links.icsUrl)
+          .then((blob) => saveBlob(blob, `biletflow-${links.eventId}.ics`))
+          .catch((err: unknown) => onError(err instanceof Error ? err.message : fallbackError))}
+        className={linkClass}
+      >
+        {label}
+      </button>
       {!links.isCancelled && <a href={links.googleCalendarUrl} target="_blank" rel="noreferrer" className={linkClass}>Google</a>}
       {!links.isCancelled && <a href={links.outlookCalendarUrl} target="_blank" rel="noreferrer" className={linkClass}>Outlook</a>}
     </>

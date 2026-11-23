@@ -60,19 +60,26 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
             return (false, "This user is already assigned to the event.");
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        user.Role = UserRole.EventAdmin;
-        db.EventAdminAssignments.Add(new EventAdminAssignment
+        try
         {
-            EventId = eventId,
-            UserId = user.Id,
-            AssignedByUserId = organizerId
-        });
-        audit.Add(AuditActionType.EventAdminAssigned, nameof(EventAdminAssignment), null, eventId, organizerId,
-            $"Event administrator {user.Email} assigned.");
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return (true, null);
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            user.Role = UserRole.EventAdmin;
+            db.EventAdminAssignments.Add(new EventAdminAssignment
+            {
+                EventId = eventId,
+                UserId = user.Id,
+                AssignedByUserId = organizerId
+            });
+            audit.Add(AuditActionType.EventAdminAssigned, nameof(EventAdminAssignment), null, eventId, organizerId,
+                $"Event administrator {user.Email} assigned.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return (true, null);
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return (false, "This user is already assigned to the event.");
+        }
     }
 
     public async Task<bool> UnassignAsync(Guid eventId, Guid staffUserId, Guid organizerId, bool isPlatformAdmin)
@@ -87,20 +94,27 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
             candidate.EventId == eventId && candidate.UserId == staffUserId);
         if (assignment is null) return false;
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        db.EventAdminAssignments.Remove(assignment);
-        var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Id == staffUserId);
-        if (user is not null && user.Role == UserRole.EventAdmin &&
-            !await db.EventAdminAssignments.AnyAsync(candidate => candidate.UserId == staffUserId && candidate.Id != assignment.Id))
+        try
         {
-            user.Role = UserRole.Attendee;
-        }
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            db.EventAdminAssignments.Remove(assignment);
+            var user = await db.Users.SingleOrDefaultAsync(candidate => candidate.Id == staffUserId);
+            if (user is not null && user.Role == UserRole.EventAdmin &&
+                !await db.EventAdminAssignments.AnyAsync(candidate => candidate.UserId == staffUserId && candidate.Id != assignment.Id))
+            {
+                user.Role = UserRole.Attendee;
+            }
 
-        audit.Add(AuditActionType.EventAdminUnassigned, nameof(EventAdminAssignment), assignment.Id, eventId,
-            organizerId, "Event administrator unassigned.");
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return true;
+            audit.Add(AuditActionType.EventAdminUnassigned, nameof(EventAdminAssignment), assignment.Id, eventId,
+                organizerId, "Event administrator unassigned.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return true;
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
+        {
+            return false;
+        }
     }
 
     public async Task<TicketVerificationResponse> ValidateAsync(Guid ticketId, Guid userId, bool isPlatformAdmin)
@@ -177,7 +191,7 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
         }
-        catch (DbUpdateException exception) when (IsSerializationConflict(exception))
+        catch (Exception exception) when (IsSerializationConflict(exception))
         {
             return new TicketVerificationResponse("AlreadyUsed", "Ticket was checked in by another staff member.", ticket.Id,
                 ticket.Event.Title, ticket.OrderItem.TicketTypeName, ticket.AttendeeName, ticket.AttendeeEmail,
@@ -191,29 +205,36 @@ public sealed class TicketVerificationService(AuthDbContext db, AuditService aud
 
     public async Task<bool> ReverseCheckInAsync(Guid ticketId, Guid userId, bool isPlatformAdmin)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-        var ticket = await db.Tickets.Include(candidate => candidate.Event)
-            .SingleOrDefaultAsync(candidate => candidate.Id == ticketId);
-        if (ticket is null || !await CanVerifyEventAsync(ticket.EventId, userId, isPlatformAdmin) ||
-            ticket.Status != TicketStatus.CheckedIn)
+        try
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+            var ticket = await db.Tickets.Include(candidate => candidate.Event)
+                .SingleOrDefaultAsync(candidate => candidate.Id == ticketId);
+            if (ticket is null || !await CanVerifyEventAsync(ticket.EventId, userId, isPlatformAdmin) ||
+                ticket.Status != TicketStatus.CheckedIn)
+            {
+                return false;
+            }
+
+            var checkIn = await db.TicketCheckIns
+                .Where(candidate => candidate.TicketId == ticketId && candidate.ReversedAt == null)
+                .OrderByDescending(candidate => candidate.CheckedInAt)
+                .FirstOrDefaultAsync();
+            if (checkIn is null) return false;
+
+            checkIn.ReversedAt = DateTimeOffset.UtcNow;
+            checkIn.ReversedByUserId = userId;
+            ticket.Status = TicketStatus.Valid;
+            audit.Add(AuditActionType.TicketCheckInReversed, nameof(Ticket), ticket.Id, ticket.EventId, userId,
+                "Ticket check-in reversed by authorized event staff.");
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return true;
+        }
+        catch (Exception exception) when (IsSerializationConflict(exception))
         {
             return false;
         }
-
-        var checkIn = await db.TicketCheckIns
-            .Where(candidate => candidate.TicketId == ticketId && candidate.ReversedAt == null)
-            .OrderByDescending(candidate => candidate.CheckedInAt)
-            .FirstOrDefaultAsync();
-        if (checkIn is null) return false;
-
-        checkIn.ReversedAt = DateTimeOffset.UtcNow;
-        checkIn.ReversedByUserId = userId;
-        ticket.Status = TicketStatus.Valid;
-        audit.Add(AuditActionType.TicketCheckInReversed, nameof(Ticket), ticket.Id, ticket.EventId, userId,
-            "Ticket check-in reversed by authorized event staff.");
-        await db.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return true;
     }
 
     public async Task<IReadOnlyList<AttendeeResponse>?> SearchAttendeesAsync(

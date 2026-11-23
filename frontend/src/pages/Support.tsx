@@ -51,15 +51,15 @@ export default function Support() {
   const [createMode, setCreateMode] = useState(searchParams.get('new') === '1')
   const [reply, setReply] = useState('')
   const isStaff = user?.role === 'PlatformAdmin' || user?.role === 'Organizer'
-  const canOpenCase = user?.role === 'Attendee' || user?.role === 'Organizer'
+  const canOpenCase = user?.role === 'Attendee' || user?.role === 'Organizer' || user?.role === 'EventAdmin'
   const categories = user?.role === 'Organizer' ? organizerCategories : attendeeCategories
 
   const refresh = useCallback(async () => {
     const [caseRows, notificationRows] = await Promise.all([getSupportCases(), getNotifications()])
     setCases(caseRows)
     setNotifications(notificationRows)
-    if (selected) setSelected(caseRows.find((row) => row.id === selected.id) ?? null)
-  }, [selected])
+    setSelected((current) => (current ? (caseRows.find((row) => row.id === current.id) ?? null) : null))
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -98,13 +98,19 @@ export default function Support() {
   async function openCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
+    const subject = String(data.get('subject') ?? '').trim()
+    const message = String(data.get('message') ?? '').trim()
+    if (!subject || !message) {
+      setError(t('auth.required'))
+      return
+    }
     setError('')
     setBusy(true)
     try {
       const created = await createSupportCase({
         category: String(data.get('category')),
-        subject: String(data.get('subject')).trim(),
-        message: String(data.get('message')).trim(),
+        subject,
+        message,
         eventId: searchParams.get('eventId') ?? undefined,
         orderId: searchParams.get('orderId') ?? undefined,
         ticketId: searchParams.get('ticketId') ?? undefined,
@@ -122,10 +128,12 @@ export default function Support() {
   async function sendReply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!activeCase) return
+    const body = reply.trim()
+    if (!body) return
     setError('')
     setBusy(true)
     try {
-      const updated = await addSupportMessage(activeCase.id, reply.trim())
+      const updated = await addSupportMessage(activeCase.id, body)
       setSelected(updated)
       setReply('')
       await refresh()

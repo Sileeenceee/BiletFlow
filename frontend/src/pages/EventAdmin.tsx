@@ -68,7 +68,11 @@ export default function EventAdmin() {
         if (!Detector) throw new Error(t('checkin.unsupported'))
         if (!navigator.mediaDevices?.getUserMedia) throw new Error(t('checkin.noCamera'))
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
-        if (cancelled) return
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          stream = null
+          return
+        }
         targetVideo.srcObject = stream
         await targetVideo.play()
         const detector = new Detector({ formats: ['qr_code'] })
@@ -189,7 +193,7 @@ export default function EventAdmin() {
                   <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-bold uppercase tracking-wide text-slate-400">{result.eventTitle ?? t('checkin.ticketDetails')}</p><h3 className="mt-1 text-lg font-bold">{result.attendeeName ?? t('role.Attendee')}</h3><p className="text-sm text-slate-500">{result.attendeeEmail}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${result.result === 'Valid' ? 'bg-emerald-50 text-emerald-700' : result.result === 'CheckedIn' ? 'bg-indigo-50 text-indigo-700' : 'bg-rose-50 text-rose-700'}`}>{statusLabel(`checkin.result.${result.result}`, result.result)}</span></div>
                   <p className="mt-3 text-sm text-slate-600">{result.ticketTypeName} {result.ticketStatus ? `· ${statusLabel(`orders.ticketStatus.${result.ticketStatus}`, result.ticketStatus)}` : ''}</p>
                   {result.result === 'Valid' && <button disabled={busy} onClick={() => void checkIn()} className={`${buttonClass} mt-4`}>{t('checkin.record')}</button>}
-                  {result.result === 'CheckedIn' && result.ticketId && <button disabled={busy} onClick={() => void undoCheckIn()} className="mt-4 rounded-xl border border-amber-200 px-4 py-2.5 text-sm font-semibold text-amber-800 hover:bg-amber-50">{t('checkin.reverse')}</button>}
+                  {(result.result === 'CheckedIn' || result.result === 'AlreadyUsed') && result.ticketId && <button disabled={busy} onClick={() => void undoCheckIn()} className="mt-4 rounded-xl border border-amber-200 px-4 py-2.5 text-sm font-semibold text-amber-800 hover:bg-amber-50">{t('checkin.reverse')}</button>}
                 </div>
               )}
             </section>

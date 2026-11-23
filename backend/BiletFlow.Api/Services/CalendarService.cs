@@ -97,7 +97,6 @@ public sealed class CalendarService(AuthDbContext db, NotificationService notifi
             order.EventId == eventId && order.AttendeeId == requesterId && order.Status != OrderStatus.Pending);
         if (hasOrder) return ev;
         if (ev.IsSuspended || ev.Visibility == EventVisibility.Private) return null;
-        if (ev.IsCancelled) return ev;
         return ev.IsPublished ? ev : null;
     }
 
