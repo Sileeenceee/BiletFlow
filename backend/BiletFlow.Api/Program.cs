@@ -41,6 +41,7 @@ public class Program
         builder.Services.AddScoped<CalendarService>();
         builder.Services.AddScoped<AdminService>();
         builder.Services.AddScoped<DataSeeder>();
+        builder.Services.AddScoped<DemoDataSeeder>();
         builder.Services.AddSingleton<EmailQueue>();
         builder.Services.AddHostedService<EmailSenderBackgroundService>();
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

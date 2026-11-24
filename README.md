@@ -103,6 +103,20 @@ All money movement is simulated (KZT) and labelled as such in responses (`isSimu
 - **Verification (4.8):** check-in/validate accept an optional `eventId` (the event selected in the scanner) and return the seat. Campaign QR links are always rejected.
 - **Platform administration (4.12)** under `/api/admin` (PlatformAdmin only): `overview`, `users` (+ `/suspend`, `/reinstate`, `/role`), `events` (`?status=reported|suspended|…`, + `/suspend`, `/reinstate`, `/paid-sales/suspend`, `/paid-sales/reinstate`), `reports`, `orders`, `payments`, `refunds`, `paid-sales-activations`, `promo-activity`, `support-cases`, `settings` (activation and processing fees), `exports/{users|events|orders|payments|refunds}` (CSV). Users report events with `POST /api/events/{id}/reports`. A suspended event is hidden and cannot sell tickets; a suspended user's tokens stop working immediately, because role and suspension are checked against the database on every request.
 - **Seeded platform admin (Development):** `admin@biletflow.local` / `AdminDemo123!` (configure `Seed:PlatformAdmin:Email` and `Seed:PlatformAdmin:Password`; change them outside local demos).
+- **Demo data (Development):** with `Seed:DemoData` set to `true` (the default in `appsettings.Development.json`, so also in Docker Compose) the API seeds demonstration accounts and events on a database that does not contain them yet. To re-seed from scratch, reset the database (`docker compose down -v`). All demo accounts use the password `Demo12345!`:
+
+  | Account | Role | What to try |
+  |---|---|---|
+  | `admin@biletflow.local` (`AdminDemo123!`) | PlatformAdmin | Overview, an open event report, an escalated organizer case, fee settings, CSV exports |
+  | `organizer@biletflow.local` | Organizer (verified, paid sales active) | Five events: free meetup, paid Jazz Night with promo codes `JAZZ10` (10 %) and `VIP5000` (5000 KZT off VIP), assigned-seating Symphony Evening, a draft and a completed event; analytics, refunds, support replies |
+  | `organizer.new@biletflow.local` | Organizer (not verified) | Draft paid Pottery Workshop: complete the paid-sales activation checklist |
+  | `staff@biletflow.local` | EventAdmin | Assigned to the meetup, Jazz Night, Symphony Evening and the past event; check in attendee tickets |
+  | `attendee@biletflow.local` | Attendee | Free, paid (with promo) and seated tickets with QR/PDF, a checked-in ticket, a support case |
+  | `attendee2@biletflow.local` | Attendee | A refunded VIP order, a seated VIP ticket, a resolved support case |
+  | `unverified@biletflow.local` | Attendee (email not verified) | Verification banner and resend flow |
+  | `suspended@biletflow.local` | Attendee (suspended) | Login is rejected |
+
+  Event dates are relative to the moment of seeding. Set `Seed:DemoData` to `false` outside local demos.
 - **Health:** `GET /health`.
 
 Integration tests for these features are in `backend/BiletFlow.Api.Tests/SrsFeatureRegressionTests.cs` (they run with `BILETFLOW_TEST_API_BASE_URL`, like the existing regression test).

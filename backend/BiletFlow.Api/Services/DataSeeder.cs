@@ -8,17 +8,23 @@ namespace BiletFlow.Api.Services;
 /// <summary>
 /// Startup seeding: platform settings, the predefined assigned-seating venue and, when <c>Seed:PlatformAdmin:Email</c>
 /// and <c>Seed:PlatformAdmin:Password</c> are configured, the first platform administrator (otherwise no admin could
-/// ever be created, since public registration only creates attendees and organizers).
+/// ever be created, since public registration only creates attendees and organizers). With <c>Seed:DemoData</c> set to
+/// true it also adds the demonstration accounts and events of <see cref="DemoDataSeeder"/>.
 /// </summary>
 public sealed class DataSeeder(
     AuthDbContext db, PlatformSettingsService settings, SeatingService seating, IPasswordHasher<AppUser> passwordHasher,
-    IConfiguration configuration, ILogger<DataSeeder> logger)
+    IConfiguration configuration, DemoDataSeeder demoData, ILogger<DataSeeder> logger)
 {
     public async Task SeedAsync()
     {
         await settings.GetAsync();
         await seating.EnsureDemoVenueAsync();
+        await SeedPlatformAdminAsync();
+        if (configuration.GetValue("Seed:DemoData", false)) await demoData.SeedAsync();
+    }
 
+    private async Task SeedPlatformAdminAsync()
+    {
         var email = configuration["Seed:PlatformAdmin:Email"]?.Trim().ToLowerInvariant();
         var password = configuration["Seed:PlatformAdmin:Password"];
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password)) return;
