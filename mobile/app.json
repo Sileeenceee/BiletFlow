@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "BiletFlow Check-in",
+    "name": "BiletFlow",
     "slug": "biletflow-checkin",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -44,7 +44,15 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
-    ]
+      ],
+      "expo-router",
+      "expo-sharing",
+      "@react-native-community/datetimepicker",
+      "expo-font"
+    ],
+    "scheme": "biletflow",
+    "experiments": {
+      "typedRoutes": false
+    }
   }
 }

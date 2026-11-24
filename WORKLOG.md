@@ -156,3 +156,84 @@ one support case and one resolved event report.
   `backend/BiletFlow.Api/appsettings.Development.json`. Outside Development that setting must be supplied, or
   `/admin` cannot be reached.
 - Web bundle is 555 kB (Vite warns above 500 kB); no code-splitting was added.
+
+---
+
+# Work log — mobile app with all website features (24 Nov 2026)
+
+The mobile app was a check-in scanner for event staff only. It now covers everything the website does, for
+every role, and keeps the scanner.
+
+## Checked first: the repository after the teammates' commits
+
+Three commits arrived on `main` (Figma design, city directory and ru/kk localisation, review fixes). Before any
+change: web type-check, lint, all 30 tests and the production build passed; the mobile app type-checked.
+
+## What changed
+
+### Shared translations (`frontend/src/lib/messages.ts`, new)
+The website's English / Russian / Kazakh dictionaries moved out of `lib/i18n.tsx` into a data-only file, with no
+change to their content. The website imports it as before; the app imports the same file through Metro
+(`mobile/metro.config.js`), so both always use the same wording. App-only texts live in
+`mobile/src/lib/mobileMessages.ts`, in all three languages.
+
+### Mobile app (`mobile/`)
+- **Navigation:** Expo Router. Bottom tabs follow the role: Explore and More for everyone, My tickets
+  (attendee), Dashboard (organizer, platform admin), Check-in (event staff), Admin (platform admin). The More tab
+  has notifications (with unread badge), support, account, organizer profile, create event, language and
+  sign-out.
+- **Attendee:** event list with search and city filter; event page with ticket quantities or the seat map,
+  server-priced promo/campaign discount, simulated payment, calendar (.ics / Google / Outlook), report event,
+  ask the organizer; campaign links (`biletflow://campaign/<token>`); My tickets with PDF, QR image and .ics
+  shared through the phone's share sheet; a full-screen QR view for the entrance.
+- **Organizer:** dashboard with Upcoming / Active / Completed / Cancelled views and date range; create event
+  (city directory, dates with the native picker); Manage event with Overview + paid-sales checklist, Tickets,
+  Seating, Campaigns (share link, campaign QR), Attendees, Orders with refunds, Analytics, History, Team;
+  organizer profile.
+- **Event staff:** the existing scanner, now translated, sending the selected event, and allowing undo after
+  "Already used".
+- **Platform admin:** all 11 admin sections, with the same reason dialog for suspensions and reports.
+- **Account:** sign in (keep me logged in, server address), register as attendee or organizer, email
+  verification and password reset (token from the email link, or the Development token), account settings
+  and deletion.
+- **Sessions:** kept in the device keystore; expired access tokens are renewed with the refresh token.
+- `src/api/` reuses copies of the website's API modules; `client.ts` and `checkin.ts` are app-specific.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| Web type-check, lint, tests (30), production build | Pass |
+| Mobile `npm run typecheck` | Pass |
+| Mobile `npm run lint` (eslint-config-expo) | No problems |
+| Mobile `npx expo-doctor` | 20 of 20 checks pass |
+| Mobile bundles for Android, iOS and web (`npx expo export`) | Pass |
+
+Clicked through the app's web build at phone size against the rebuilt Docker stack:
+
+- **Attendee:** sign in → campaign link opens the event with the code applied → 2 VIP tickets, server quote
+  10,000 − 1,000 = 9,000 KZT → reserve → simulated payment → full-screen QR codes. Seat map: pick seat J2 →
+  free reservation → My tickets shows "Section Balcony, row J, seat 2". The PDF and .ics endpoints behind the
+  download buttons return a real PDF and calendar file. Support request from an event; unread badge on More.
+- **Organizer:** dashboard figures; all nine Manage tabs load real data; full refund from Orders; a new event
+  created through the form (city picker, typed dates in the web preview) lands in Manage.
+- **Event staff:** assigned event listed → ticket code → "Admitted", totals 1 / 1 / 100% → same code again →
+  "Already used".
+- **Platform admin:** all 11 sections load; suspend and reinstate an event through the reason dialog.
+- **Language:** Kazakh screens render from the shared dictionaries.
+- **Website** in Docker after the dictionary move: loads with no console errors.
+
+**Not verified:** a real phone — camera scanning, the native date pickers, the share sheet and secure storage
+only run on a device or emulator. The web preview covers the same screens and API calls.
+
+## Known gaps
+
+- Admitting someone from the staff attendee list still needs their ticket code (the API checks in by code).
+- No offline mode.
+- `src/api/*` are copies of the website's modules; an API change needs updating in both places.
+
+## Test data left in the development database
+
+Accounts `mob-organizer-5e8f69@example.test`, `mob-attendee-5e8f69@example.test`,
+`mob-staff-5e8f69@example.test`; events "Mobile concert 5e8f69", "Mobile seated 5e8f69" and "Mobile-created
+event"; a few orders, one refund and one support case.
