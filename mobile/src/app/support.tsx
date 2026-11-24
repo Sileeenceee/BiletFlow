@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { escalateSupportCase } from '../api/platform'
 import { addSupportMessage, createSupportCase, getSupportCases, updateSupportCase, type SupportCase } from '../api/workflows'
+import { SupportContextFields } from '../components/SupportContextFields'
 import { Badge, Button, Card, Empty, ErrorText, Field, Header, Loading, Notice, Screen, Select, colors, text } from '../components/ui'
 import { useAuth } from '../lib/auth'
 import { errorMessage, formatDateTime } from '../lib/format'
@@ -38,6 +39,9 @@ export default function Support() {
   const [selectedId, setSelectedId] = useState(params.caseId ?? '')
   const [createMode, setCreateMode] = useState(params.new === '1')
   const [category, setCategory] = useState('')
+  // Chosen in the form when it was not opened from an event, order or ticket.
+  const [contextEvent, setContextEvent] = useState('')
+  const [contextOrder, setContextOrder] = useState('')
   const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
   const [reply, setReply] = useState('')
@@ -81,8 +85,8 @@ export default function Support() {
         category: category || categories[0],
         subject: subject.trim(),
         message: message.trim(),
-        eventId: params.eventId || undefined,
-        orderId: params.orderId || undefined,
+        eventId: params.eventId || contextEvent || undefined,
+        orderId: params.orderId || contextOrder || undefined,
         ticketId: params.ticketId || undefined,
       })
       await refresh()
@@ -90,6 +94,8 @@ export default function Support() {
       setCreateMode(false)
       setSubject('')
       setMessage('')
+      setContextEvent('')
+      setContextOrder('')
     } catch (err) {
       setError(errorMessage(err, t('support.openError')))
     } finally {
@@ -121,7 +127,9 @@ export default function Support() {
           <Select label={t('support.categoryLabel')} value={category || categories[0]} onChange={setCategory} options={categories.map((value) => ({ value, label: label(categoryKeys, value) }))} />
           <Field label={t('support.subject')} value={subject} onChangeText={setSubject} maxLength={200} />
           <Field label={t('support.message')} value={message} onChangeText={setMessage} maxLength={4000} multiline />
-          {related ? <Notice tone="info" message={t('support.relatedNote', { items: related })} /> : null}
+          {related
+            ? <Notice tone="info" message={t('support.relatedNote', { items: related })} />
+            : <SupportContextFields organizer={user?.role === 'Organizer'} eventId={contextEvent} orderId={contextOrder} onEvent={setContextEvent} onOrder={setContextOrder} />}
           <ErrorText message={error} />
           <Button label={busy ? t('forgot.submitting') : t('support.submit')} busy={busy} onPress={() => void openCase()} />
           <Button label={t('common.cancel')} variant="ghost" onPress={() => setCreateMode(false)} />

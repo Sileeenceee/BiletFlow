@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { addSupportMessage, createSupportCase, getNotifications, getSupportCases, markNotificationRead, updateSupportCase, type SupportCase } from '../api/workflows'
+import { getEvents, getMyOrders, type Order } from '../api/events'
 import { escalateSupportCase } from '../api/platform'
 import { buttonClass, inputClass } from '../components/form'
 import { useAuth } from '../lib/auth'
-import { formatDateTime } from '../lib/format'
+import { formatDate, formatDateTime } from '../lib/format'
 import { useLocale, type MessageKey } from '../lib/i18n'
 
 // Category and status values are what the API stores; only their labels are translated.
@@ -53,6 +54,8 @@ export default function Support() {
   const isStaff = user?.role === 'PlatformAdmin' || user?.role === 'Organizer'
   const canOpenCase = user?.role === 'Attendee' || user?.role === 'Organizer' || user?.role === 'EventAdmin'
   const categories = user?.role === 'Organizer' ? organizerCategories : attendeeCategories
+  // Opened from an event, order or ticket page: that context is attached and cannot be changed here.
+  const linkContext = Boolean(searchParams.get('eventId') || searchParams.get('orderId') || searchParams.get('ticketId'))
 
   const refresh = useCallback(async () => {
     const [caseRows, notificationRows] = await Promise.all([getSupportCases(), getNotifications()])
@@ -111,8 +114,8 @@ export default function Support() {
         category: String(data.get('category')),
         subject,
         message,
-        eventId: searchParams.get('eventId') ?? undefined,
-        orderId: searchParams.get('orderId') ?? undefined,
+        eventId: searchParams.get('eventId') ?? (String(data.get('eventId') ?? '') || undefined),
+        orderId: searchParams.get('orderId') ?? (String(data.get('orderId') ?? '') || undefined),
         ticketId: searchParams.get('ticketId') ?? undefined,
       })
       await refresh()
@@ -196,7 +199,8 @@ export default function Support() {
           <label className="block text-sm font-medium">{t('support.categoryLabel')}<select name="category" required className={`${inputClass} mt-1.5`}>{categories.map((category) => <option key={category} value={category}>{t(categoryKeys[category])}</option>)}</select></label>
           <label className="block text-sm font-medium">{t('support.subject')}<input name="subject" required maxLength={200} className={`${inputClass} mt-1.5`} /></label>
           <label className="block text-sm font-medium">{t('support.message')}<textarea name="message" required maxLength={4000} rows={6} className={`${inputClass} mt-1.5`} /></label>
-          {(searchParams.get('orderId') || searchParams.get('eventId') || searchParams.get('ticketId')) && <p className="rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800">{t('support.relatedNote', { items: [searchParams.get('eventId') && t('support.relatedEvent'), searchParams.get('orderId') && t('support.relatedOrder'), searchParams.get('ticketId') && t('support.relatedTicket')].filter(Boolean).join(', ') })}</p>}
+          {!linkContext && user && <ContextFields organizer={user.role === 'Organizer'} />}
+          {linkContext && <p className="rounded-xl bg-indigo-50 p-3 text-xs text-indigo-800">{t('support.relatedNote', { items: [searchParams.get('eventId') && t('support.relatedEvent'), searchParams.get('orderId') && t('support.relatedOrder'), searchParams.get('ticketId') && t('support.relatedTicket')].filter(Boolean).join(', ') })}</p>}
           <div className="flex gap-3"><button disabled={busy} className={buttonClass}>{busy ? t('forgot.submitting') : t('support.submit')}</button><button type="button" onClick={() => setCreateMode(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">{t('common.cancel')}</button></div>
         </form>
       ) : (
@@ -226,6 +230,55 @@ export default function Support() {
             )}
           </section>
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Lets the requester attach the event (and order) the question is about. The API sends an attendee case
+ * with an event to that event's organizer; without one it goes to platform support (SRS 4.13).
+ */
+function ContextFields({ organizer }: { organizer: boolean }) {
+  const { t } = useLocale()
+  const [events, setEvents] = useState<{ id: string; title: string }[] | null>(null)
+  const [orders, setOrders] = useState<Order[]>([])
+  const [eventId, setEventId] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    // Attendees pick from events they hold orders for; organizers from their own events.
+    const load = organizer
+      ? getEvents(true).then((rows) => ({ events: rows.map((row) => ({ id: row.id, title: row.title })), orders: [] as Order[] }))
+      : getMyOrders().then((rows) => ({
+        events: [...new Map(rows.map((row) => [row.eventId, { id: row.eventId, title: row.eventTitle }])).values()],
+        orders: rows,
+      }))
+    load
+      .then((value) => { if (!active) return; setEvents(value.events); setOrders(value.orders) })
+      .catch((err: unknown) => { if (active) { setEvents([]); setError(err instanceof Error ? err.message : t('support.contextError')) } })
+    return () => { active = false }
+  }, [organizer, t])
+
+  const eventOrders = orders.filter((order) => order.eventId === eventId)
+  return (
+    <div className="space-y-4">
+      <label className="block text-sm font-medium">{t('support.eventLabel')}
+        <select name="eventId" value={eventId} onChange={(event) => setEventId(event.target.value)} disabled={!events} className={`${inputClass} mt-1.5`}>
+          <option value="">{t('support.eventNone')}</option>
+          {events?.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+        </select>
+        <span className="mt-1.5 block text-xs font-normal text-slate-500">{organizer ? t('support.organizerEventHint') : t('support.eventHint')}</span>
+      </label>
+      {error && <p role="alert" className="text-xs text-rose-700">{error}</p>}
+      {eventOrders.length > 0 && (
+        <label className="block text-sm font-medium">{t('support.orderLabel')}
+          <select key={eventId} name="orderId" defaultValue="" className={`${inputClass} mt-1.5`}>
+            <option value="">{t('support.orderNone')}</option>
+            {eventOrders.map((order) => <option key={order.id} value={order.id}>{t('support.orderOption', { id: order.id.slice(0, 8), date: formatDate(order.createdAt) })}</option>)}
+          </select>
+        </label>
       )}
     </div>
   )
