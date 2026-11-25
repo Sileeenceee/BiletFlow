@@ -42,7 +42,7 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: t('nav.explore'), tabBarIcon: icon('compass-outline') }} />
-      <Tabs.Screen name="tickets" options={{ title: t('nav.tickets'), tabBarIcon: icon('ticket-outline'), href: role === 'Attendee' ? undefined : null }} />
+      <Tabs.Screen name="tickets" options={{ title: t('nav.tickets'), tabBarIcon: icon('ticket-outline'), href: role === 'Attendee' || role === 'EventAdmin' ? undefined : null }} />
       <Tabs.Screen name="dashboard" options={{ title: t('nav.dashboard'), tabBarIcon: icon('stats-chart-outline'), href: isOrganizerRole(role) ? undefined : null }} />
       <Tabs.Screen name="checkin" options={{ title: t('nav.checkin'), tabBarIcon: icon('qr-code-outline'), href: role === 'EventAdmin' ? undefined : null }} />
       <Tabs.Screen name="admin" options={{ title: t('nav.admin'), tabBarIcon: icon('shield-checkmark-outline'), href: role === 'PlatformAdmin' ? undefined : null }} />
