@@ -71,6 +71,7 @@ add a key on the website, the app picks it up on the next build.
 ## Checks
 
 ```bash
+npm test
 npm run typecheck
 ```
 

@@ -133,7 +133,7 @@ public sealed class SrsFeatureRegressionTests(ApiFactory factory) : IClassFixtur
         var venue = venues.EnumerateArray().Single(row => row.GetProperty("name").GetString() == "BiletFlow Demo Hall");
         var sections = venue.GetProperty("sections").EnumerateArray()
             .ToDictionary(row => row.GetProperty("name").GetString()!, row => row.GetProperty("id").GetGuid());
-        Assert.True(venue.GetProperty("sections").EnumerateArray().Any(row => row.GetProperty("accessibleSeatCount").GetInt32() > 0));
+        Assert.Contains(venue.GetProperty("sections").EnumerateArray(), row => row.GetProperty("accessibleSeatCount").GetInt32() > 0);
 
         var map = await SendAsync(client, HttpMethod.Put, $"/api/events/{eventId}/seating", new
         {
@@ -306,6 +306,214 @@ public sealed class SrsFeatureRegressionTests(ApiFactory factory) : IClassFixtur
         }
     }
 
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task AccountVerificationAndPasswordResetUpdateCredentialsAndRevokeRefreshSessions()
+    {
+        using var client = factory.CreateClient();
+        var email = $"account-{Guid.NewGuid():N}@example.test";
+        var registration = await SendAsync(client, HttpMethod.Post, "/api/auth/register",
+            new { email, password = Password }, null, HttpStatusCode.Created);
+        Assert.Equal("Attendee", registration.GetProperty("role").GetString());
+        Assert.False(registration.GetProperty("emailConfirmed").GetBoolean());
+
+        var credentials = new { email, password = Password };
+        var login = await SendAsync(client, HttpMethod.Post, "/api/auth/login", credentials, null, HttpStatusCode.OK);
+        var session = new Account(email, login.GetProperty("accessToken").GetString()!);
+        var refreshToken = login.GetProperty("refreshToken").GetString();
+        var verification = new { token = registration.GetProperty("verificationToken").GetString() };
+        await SendAsync(client, HttpMethod.Post, "/api/auth/verify-email", verification, null, HttpStatusCode.OK);
+        await SendAsync(client, HttpMethod.Post, "/api/auth/verify-email", verification, null, HttpStatusCode.BadRequest);
+        var profile = await SendAsync(client, HttpMethod.Get, "/api/auth/me", null, session, HttpStatusCode.OK);
+        Assert.True(profile.GetProperty("emailConfirmed").GetBoolean());
+
+        var reset = await SendAsync(client, HttpMethod.Post, "/api/auth/forgot-password",
+            new { email }, null, HttpStatusCode.OK);
+        const string newPassword = "UpdatedTestPassword123!";
+        var resetRequest = new { token = reset.GetProperty("resetToken").GetString(), newPassword };
+        await SendAsync(client, HttpMethod.Post, "/api/auth/reset-password", resetRequest, null, HttpStatusCode.OK);
+        await SendAsync(client, HttpMethod.Post, "/api/auth/reset-password", resetRequest, null, HttpStatusCode.BadRequest);
+        await SendAsync(client, HttpMethod.Post, "/api/auth/login", credentials, null, HttpStatusCode.Unauthorized);
+        await SendAsync(client, HttpMethod.Post, "/api/auth/refresh", new { refreshToken }, null, HttpStatusCode.Unauthorized);
+        await LoginAsync(client, email, newPassword);
+    }
+
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task RefreshRotatesTheTokenAndRepeatedUseRevokesTheReplacement()
+    {
+        using var client = factory.CreateClient();
+        var account = await RegisterAsync(client, $"refresh-{Guid.NewGuid():N}@example.test");
+        var login = await SendAsync(client, HttpMethod.Post, "/api/auth/login",
+            new { account.Email, password = Password }, null, HttpStatusCode.OK);
+        var previous = login.GetProperty("refreshToken").GetString();
+        var refreshed = await SendAsync(client, HttpMethod.Post, "/api/auth/refresh",
+            new { refreshToken = previous }, null, HttpStatusCode.OK);
+        var replacement = refreshed.GetProperty("refreshToken").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(replacement));
+        Assert.NotEqual(previous, replacement);
+
+        await SendAsync(client, HttpMethod.Post, "/api/auth/refresh",
+            new { refreshToken = previous }, null, HttpStatusCode.Unauthorized);
+        await SendAsync(client, HttpMethod.Post, "/api/auth/refresh",
+            new { refreshToken = replacement }, null, HttpStatusCode.Unauthorized);
+    }
+
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task PublicCityDirectoryFiltersPublishedEventsAndInvalidCitiesAreRejected()
+    {
+        using var client = factory.CreateClient();
+        var organizer = await RegisterAsync(client, $"city-{Guid.NewGuid():N}@example.test", organizer: true);
+        var cities = await SendAsync(client, HttpMethod.Get, "/api/cities", null, null, HttpStatusCode.OK);
+        var firstCity = cities[0];
+        var otherCity = cities[1];
+        var title = $"City filter {Guid.NewGuid():N}";
+        var eventId = await CreateEventAsync(client, organizer, title, firstCity.GetProperty("id").GetInt32());
+        var search = Uri.EscapeDataString(title);
+        var matchingCity = Uri.EscapeDataString(firstCity.GetProperty("name").GetString()!);
+        var differentCity = Uri.EscapeDataString(otherCity.GetProperty("name").GetString()!);
+        var matches = await SendAsync(client, HttpMethod.Get, $"/api/events?search={search}&city={matchingCity}",
+            null, null, HttpStatusCode.OK);
+        Assert.Equal(eventId, Assert.Single(matches.EnumerateArray()).GetProperty("id").GetGuid());
+        var excluded = await SendAsync(client, HttpMethod.Get, $"/api/events?search={search}&city={differentCity}",
+            null, null, HttpStatusCode.OK);
+        Assert.Empty(excluded.EnumerateArray());
+
+        await SendAsync(client, HttpMethod.Post, "/api/events", new
+        {
+            title, description = "Invalid city test event", venue = "Integration Hall", cityId = int.MaxValue,
+            startDateUtc = DateTimeOffset.UtcNow.AddDays(5), endDateUtc = DateTimeOffset.UtcNow.AddDays(6)
+        }, organizer, HttpStatusCode.BadRequest);
+    }
+
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task AssignedStaffCanCheckInAndReverseOnlyTicketsForTheirEvent()
+    {
+        using var client = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        var organizer = await RegisterAsync(client, $"checkin-org-{suffix}@example.test", organizer: true);
+        var attendee = await RegisterAsync(client, $"checkin-att-{suffix}@example.test");
+        var staff = await RegisterAsync(client, $"checkin-staff-{suffix}@example.test");
+        var eventId = await CreateEventAsync(client, organizer, $"Admission {suffix}");
+        var ticketTypeId = await CreateTicketTypeAsync(client, organizer, eventId, price: 0m, quantity: 1);
+        var order = await SendAsync(client, HttpMethod.Post, "/api/orders/checkout", new
+        {
+            eventId, attendeeName = "Ticket Holder", attendeeEmail = attendee.Email,
+            items = new[] { new { ticketTypeId, quantity = 1 } }
+        }, attendee, HttpStatusCode.Created);
+        var ticket = order.GetProperty("items")[0].GetProperty("tickets")[0];
+        var ticketId = ticket.GetProperty("id").GetGuid();
+        var ticketCode = ticket.GetProperty("code").GetString();
+        var scan = new { ticketCode, eventId };
+        const string checkInPath = "/api/verification/check-in";
+        var summaryPath = $"/api/verification/events/{eventId}/summary";
+
+        await SendAsync(client, HttpMethod.Get, $"/api/orders/{order.GetProperty("id").GetGuid()}", null, staff, HttpStatusCode.NotFound);
+        await SendAsync(client, HttpMethod.Get, $"/api/tickets/{ticketId}/pdf", null, staff, HttpStatusCode.NotFound);
+        await SendAsync(client, HttpMethod.Get, $"/api/tickets/{ticketId}/qr", null, staff, HttpStatusCode.NotFound);
+        await SendAsync(client, HttpMethod.Post, checkInPath, scan, staff, HttpStatusCode.BadRequest);
+        await SendAsync(client, HttpMethod.Post, $"/api/events/{eventId}/event-admins",
+            new { staff.Email }, organizer, HttpStatusCode.NoContent);
+        staff = await LoginAsync(client, staff.Email, Password);
+
+        await SendAsync(client, HttpMethod.Post, checkInPath, new { ticketCode, eventId = Guid.NewGuid() },
+            staff, HttpStatusCode.BadRequest);
+        var validation = await SendAsync(client, HttpMethod.Post, "/api/verification/validate", scan, staff, HttpStatusCode.OK);
+        Assert.Equal("Valid", validation.GetProperty("result").GetString());
+        var beforeCheckIn = await SendAsync(client, HttpMethod.Get, summaryPath, null, staff, HttpStatusCode.OK);
+        Assert.Equal(0, beforeCheckIn.GetProperty("checkedIn").GetInt32());
+        var checkedIn = await SendAsync(client, HttpMethod.Post, checkInPath, scan, staff, HttpStatusCode.OK);
+        Assert.Equal("CheckedIn", checkedIn.GetProperty("result").GetString());
+        var repeated = await SendAsync(client, HttpMethod.Post, checkInPath, scan, staff, HttpStatusCode.Conflict);
+        Assert.Equal("AlreadyUsed", repeated.GetProperty("result").GetString());
+        var afterCheckIn = await SendAsync(client, HttpMethod.Get, summaryPath, null, staff, HttpStatusCode.OK);
+        Assert.Equal(1, afterCheckIn.GetProperty("checkedIn").GetInt32());
+        await SendAsync(client, HttpMethod.Post, $"/api/verification/tickets/{ticketId}/reverse", null, staff, HttpStatusCode.OK);
+        var afterReverse = await SendAsync(client, HttpMethod.Get, summaryPath, null, staff, HttpStatusCode.OK);
+        Assert.Equal(0, afterReverse.GetProperty("checkedIn").GetInt32());
+        await SendAsync(client, HttpMethod.Post, checkInPath, scan, staff, HttpStatusCode.OK);
+    }
+
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task ConcurrentPaidCheckoutReservesOneTicketAndCancellationReleasesIt()
+    {
+        using var client = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        var organizer = await RegisterAsync(client, $"inventory-org-{suffix}@example.test", organizer: true);
+        var first = await RegisterAsync(client, $"inventory-first-{suffix}@example.test");
+        var second = await RegisterAsync(client, $"inventory-second-{suffix}@example.test");
+        var eventId = await CreateEventAsync(client, organizer, $"Limited inventory {suffix}");
+        var ticketTypeId = await CreateTicketTypeAsync(client, organizer, eventId, price: 5000m, quantity: 1);
+        await SendAsync(client, HttpMethod.Post, $"/api/events/{eventId}/paid-sales/activate-simulation",
+            new { confirmSimulationOnly = true }, organizer, HttpStatusCode.OK);
+
+        object CheckoutBody(Account account) => new
+        {
+            eventId, attendeeName = "Inventory Test", attendeeEmail = account.Email,
+            items = new[] { new { ticketTypeId, quantity = 1 } }
+        };
+        async Task<(Account Account, HttpStatusCode Status, JsonElement Body)> CheckoutAsync(Account account)
+        {
+            using var request = Authorized(HttpMethod.Post, "/api/orders/checkout", account);
+            request.Content = JsonContent.Create(CheckoutBody(account), options: JsonOptions);
+            using var response = await client.SendAsync(request);
+            return (account, response.StatusCode, await response.Content.ReadFromJsonAsync<JsonElement>());
+        }
+
+        var attempts = await Task.WhenAll(CheckoutAsync(first), CheckoutAsync(second));
+        var winner = Assert.Single(attempts, attempt => attempt.Status == HttpStatusCode.Created);
+        var other = Assert.Single(attempts, attempt => attempt.Account != winner.Account);
+        Assert.Equal(HttpStatusCode.Conflict, other.Status);
+        Assert.Equal("Pending", winner.Body.GetProperty("status").GetString());
+        Assert.Empty(winner.Body.GetProperty("items")[0].GetProperty("tickets").EnumerateArray());
+
+        var orderId = winner.Body.GetProperty("id").GetGuid();
+        var cancelled = await SendAsync(client, HttpMethod.Post, $"/api/orders/{orderId}/cancel",
+            null, winner.Account, HttpStatusCode.OK);
+        Assert.Equal("Cancelled", cancelled.GetProperty("status").GetString());
+        var replacement = await SendAsync(client, HttpMethod.Post, "/api/orders/checkout", CheckoutBody(other.Account),
+            other.Account, HttpStatusCode.Created);
+        Assert.Equal("Pending", replacement.GetProperty("status").GetString());
+    }
+
+    [TicketingRegressionTests.RequiresTestApiFact]
+    public async Task EventSupportIsPrivateAndRepliesAppearInTheRequestersUnreadNotifications()
+    {
+        using var client = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        var organizer = await RegisterAsync(client, $"support-org-{suffix}@example.test", organizer: true);
+        var requester = await RegisterAsync(client, $"support-att-{suffix}@example.test");
+        var otherAttendee = await RegisterAsync(client, $"support-other-{suffix}@example.test");
+        var eventId = await CreateEventAsync(client, organizer, $"Support {suffix}");
+        var supportCase = await SendAsync(client, HttpMethod.Post, "/api/support/cases", new
+        {
+            eventId, category = "event information", subject = "Entrance information", message = "Which entrance should I use?"
+        }, requester, HttpStatusCode.Created);
+        var caseId = supportCase.GetProperty("id").GetGuid();
+        var path = $"/api/support/cases/{caseId}";
+        await SendAsync(client, HttpMethod.Get, path, null, otherAttendee, HttpStatusCode.NotFound);
+        await SendAsync(client, HttpMethod.Put, path, new { status = "Resolved" }, requester, HttpStatusCode.Forbidden);
+        const string reply = "Please use the south entrance.";
+        await SendAsync(client, HttpMethod.Post, $"{path}/messages", new { body = reply }, organizer, HttpStatusCode.OK);
+        var updated = await SendAsync(client, HttpMethod.Get, path, null, requester, HttpStatusCode.OK);
+        Assert.Contains(updated.GetProperty("messages").EnumerateArray(), message => message.GetProperty("body").GetString() == reply);
+
+        const string unreadPath = "/api/notifications?unreadOnly=true";
+        var unread = await SendAsync(client, HttpMethod.Get, unreadPath, null, requester, HttpStatusCode.OK);
+        var notification = Assert.Single(unread.EnumerateArray(), row =>
+            row.GetProperty("relatedCaseId").ValueKind == JsonValueKind.String
+            && row.GetProperty("relatedCaseId").GetGuid() == caseId);
+        var readPath = $"/api/notifications/{notification.GetProperty("id").GetGuid()}/read";
+        await SendAsync(client, HttpMethod.Put, readPath, null, otherAttendee, HttpStatusCode.NotFound);
+        await SendAsync(client, HttpMethod.Put, readPath, null, requester, HttpStatusCode.NoContent);
+        var remaining = await SendAsync(client, HttpMethod.Get, unreadPath, null, requester, HttpStatusCode.OK);
+        Assert.DoesNotContain(remaining.EnumerateArray(), row => row.GetProperty("id").GetGuid() == notification.GetProperty("id").GetGuid());
+
+        var escalated = await SendAsync(client, HttpMethod.Post, $"{path}/escalate",
+            new { reason = "Further assistance needed" }, requester, HttpStatusCode.OK);
+        Assert.True(escalated.GetProperty("isEscalated").GetBoolean());
+        await SendAsync(client, HttpMethod.Put, path, new { status = "Resolved" }, organizer, HttpStatusCode.OK);
+        await SendAsync(client, HttpMethod.Post, $"{path}/messages", new { body = "Follow up" }, requester, HttpStatusCode.Conflict);
+    }
+
     private sealed record Account(string Email, string AccessToken);
 
     private static async Task<Account> RegisterAsync(HttpClient client, string email, bool organizer = false)
@@ -323,14 +531,14 @@ public sealed class SrsFeatureRegressionTests(ApiFactory factory) : IClassFixtur
         return new Account(email, login.GetProperty("accessToken").GetString()!);
     }
 
-    private static async Task<Guid> CreateEventAsync(HttpClient client, Account organizer, string title)
+    private static async Task<Guid> CreateEventAsync(HttpClient client, Account organizer, string title, int cityId = 1)
     {
         var ev = await SendAsync(client, HttpMethod.Post, "/api/events", new
         {
             title,
             description = "Integration test event for the finalized BiletFlow backend features.",
             venue = "Integration Hall",
-            cityId = 1,
+            cityId,
             venueAddress = "Abay Avenue 1",
             timezone = "Asia/Almaty",
             refundPolicy = "Full refunds until the day before the event.",

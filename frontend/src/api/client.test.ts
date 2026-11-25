@@ -86,4 +86,35 @@ describe('apiFetch', () => {
     expect(getToken()).toBe('fresh')
     expect(vi.mocked(fetch).mock.calls[1][0]).toBe('/api/auth/refresh')
   })
+
+  it('shares a single refresh across concurrent unauthorized requests', async () => {
+    saveSession('stale', '2099-01-01T00:00:00.000Z', {
+      id: 'user-1',
+      email: 'attendee@example.com',
+      role: 'Attendee',
+      emailConfirmed: true,
+    }, 'refresh-1')
+    const fetchMock = vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (url === '/api/auth/refresh') {
+        return Response.json({
+          accessToken: 'fresh',
+          refreshToken: 'refresh-2',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          userId: 'user-1',
+          email: 'attendee@example.com',
+          role: 'Attendee',
+          emailConfirmed: true,
+        })
+      }
+      const headers = new Headers(init?.headers)
+      return headers.get('Authorization') === 'Bearer fresh'
+        ? Response.json({ path: url })
+        : new Response(null, { status: 401 })
+    })
+
+    const requests = Promise.all([apiFetch('/api/orders/me'), apiFetch('/api/notifications')])
+    await expect(requests).resolves.toEqual([{ path: '/api/orders/me' }, { path: '/api/notifications' }])
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/auth/refresh')).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
 })

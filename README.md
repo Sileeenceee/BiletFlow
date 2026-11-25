@@ -62,15 +62,40 @@ dotnet ef database update \
 
 `InitialSchema` is the baseline migration for a fresh database. Existing databases created before EF migrations were introduced need a reviewed, data-preserving upgrade migration before applying this baseline; do not drop the Compose volume to apply schema changes.
 
-## Backend regression tests
+## Automated tests
 
-Run the backend test project with:
+Run the web and mobile checks from the repository root.
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run test:run
+npm --prefix frontend run lint
+npm --prefix frontend run build
+npm --prefix mobile ci
+npm --prefix mobile test
+npm --prefix mobile run lint
+npm --prefix mobile run typecheck
+```
+
+The backend suite uses the .NET 10 SDK. With no test API URL configured, it runs the database-independent tests and skips the PostgreSQL-backed regressions.
 
 ```sh
 dotnet test backend/BiletFlow.Api.Tests/BiletFlow.Api.Tests.csproj
 ```
 
-The locale-independent validation test runs without external services. The API integration regression is skipped unless `BILETFLOW_TEST_API_BASE_URL` points to a test API connected to a disposable PostgreSQL database; it creates test accounts, events, and orders in that database. Do not point it at a database containing data you need to keep.
+For the backend integration and browser suites, use the isolated Compose configuration. It starts a Development API, PostgreSQL in temporary storage, Mailpit, and the frontend on loopback ports assigned by Docker. Both suites create accounts, events, and orders, so point them only at a disposable stack.
+
+```powershell
+docker compose -p biletflow-regression -f docker-compose.yml -f docker-compose.test.yml up --build -d --wait
+$env:BILETFLOW_TEST_API_BASE_URL = "https://$(docker compose -p biletflow-regression -f docker-compose.yml -f docker-compose.test.yml port api 6969)"
+$env:BILETFLOW_E2E_BASE_URL = "http://$(docker compose -p biletflow-regression -f docker-compose.yml -f docker-compose.test.yml port frontend 80)"
+dotnet test backend/BiletFlow.Api.Tests/BiletFlow.Api.Tests.csproj
+npm --prefix frontend exec -- playwright install chromium
+npm --prefix frontend run test:e2e
+docker compose -p biletflow-regression -f docker-compose.yml -f docker-compose.test.yml down
+```
+
+The browser suite exercises registration, email verification, event discovery, free checkout, and PDF download. The mobile suite exercises the scanner API contract, session renewal, and binary ticket downloads. Camera permissions and QR capture still require an Android or iOS device or emulator.
 
 ## Authentication API
 
