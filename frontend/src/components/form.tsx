@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 
 export const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100'
+  'w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-[15px] text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15 disabled:bg-slate-50'
 export const buttonClass =
-  'inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-brand-500 px-5 text-sm font-bold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50'
 
 export function FieldError({ message }: { message?: string }) {
   if (!message) return null
@@ -30,7 +30,7 @@ type FieldProps = {
 export function Field({ id, label, error, children }: FieldProps) {
   return (
     <div>
-      <label htmlFor={id} className="mb-1.5 block text-sm font-medium text-slate-700">
+      <label htmlFor={id} className="mb-2 block text-[13px] font-bold text-slate-900">
         {label}
       </label>
       {children}

@@ -53,7 +53,8 @@ public sealed class EventService(
 
     /// <summary>
     /// Organizers and platform admins can open any of their events, including drafts (preview), cancelled and suspended ones.
-    /// Others see published, non-cancelled, non-suspended events that are public or unlisted.
+    /// Others see published, non-cancelled, non-suspended events that are public or unlisted. Someone who ordered
+    /// tickets for an event can still open it after it is cancelled, to see the cancellation and their refund.
     /// </summary>
     public async Task<Event?> GetEventAsync(Guid eventId, Guid? requesterId, bool isPlatformAdmin)
     {
@@ -62,7 +63,14 @@ public sealed class EventService(
 
         var canManage = isPlatformAdmin || requesterId == ev.OrganizerId;
         if (canManage) return ev;
-        return ev.IsPublished && !ev.IsCancelled && !ev.IsSuspended && ev.Visibility != EventVisibility.Private ? ev : null;
+        if (ev.IsPublished && !ev.IsCancelled && !ev.IsSuspended && ev.Visibility != EventVisibility.Private) return ev;
+        if (ev.IsCancelled && !ev.IsSuspended && requesterId is { } attendeeId &&
+            await db.Orders.AnyAsync(order => order.EventId == ev.Id && order.AttendeeId == attendeeId))
+        {
+            return ev;
+        }
+
+        return null;
     }
 
     public async Task<(Event? Event, string? Error)> CreateAsync(Guid organizerId, CreateEventRequest request)

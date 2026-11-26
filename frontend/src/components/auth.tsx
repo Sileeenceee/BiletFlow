@@ -15,7 +15,7 @@ const shortLabels = { kk: 'ҚАЗ', ru: 'РУС', en: 'ENG' } as const
 
 export function Logo({ className = '', light = false }: { className?: string; light?: boolean }) {
   return (
-    <Link to="/events" className={`flex items-center gap-2.5 ${className}`}>
+    <Link to="/" className={`flex items-center gap-2.5 ${className}`}>
       <img src={logo} alt="" className="size-[34px]" />
       <span className={`font-display text-[22px] font-bold tracking-tight ${light ? 'text-white' : 'text-slate-900'}`}>
         BiletFlow

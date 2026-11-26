@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react'
 import { getActivityTypes, getEventHistory, type HistoryEntry } from '../../api/platform'
-import { inputClass } from '../../components/form'
+import { Badge } from '../../components/EventCard'
 import { dayBoundary, formatDateTime, humanize } from '../../lib/format'
 import { isMessageKey, useLocale } from '../../lib/i18n'
+import { card, Empty } from './ui'
 
-/** Read-only activity timeline (SRS 4.16): audit entries cannot be edited or deleted here. */
+// Badge colour by kind of activity, matched on the action type's name.
+function tone(type: string): 'green' | 'amber' | 'rose' | 'cyan' | 'slate' {
+  if (/Reversed|Reversal|Undo/i.test(type)) return 'amber'
+  if (/Refund|Cancel|Suspend|Failed|Expired/i.test(type)) return 'rose'
+  if (/Publish|Succeeded|Confirmed|Activated|Reinstat/i.test(type)) return 'green'
+  if (/CheckIn|Promo|Campaign/i.test(type)) return 'cyan'
+  return 'slate'
+}
+
+/** Read-only activity timeline (SRS 4.16, design 4.15): audit entries cannot be edited or deleted here. */
 export function HistoryTab({ eventId, onError }: { eventId: string; onError: (value: string) => void }) {
   const [types, setTypes] = useState<string[]>([])
   const [type, setType] = useState('')
@@ -12,9 +22,9 @@ export function HistoryTab({ eventId, onError }: { eventId: string; onError: (va
   const [to, setTo] = useState('')
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null)
   const { t } = useLocale()
-  const activityLabel = (type: string) => {
-    const key = `activity.${type}`
-    return isMessageKey(key) ? t(key) : humanize(type)
+  const activityLabel = (value: string) => {
+    const key = `activity.${value}`
+    return isMessageKey(key) ? t(key) : humanize(value)
   }
 
   useEffect(() => {
@@ -29,22 +39,28 @@ export function HistoryTab({ eventId, onError }: { eventId: string; onError: (va
     return () => { active = false }
   }, [eventId, from, onError, t, to, type])
 
+  const control = 'h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900'
   return (
-    <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section>
       <div className="flex flex-wrap items-end gap-3">
-        <div className="mr-auto"><h2 className="text-xl font-bold">{t('history.title')}</h2><p className="mt-1 text-sm text-slate-500">{t('history.text')}</p></div>
-        <label className="text-sm font-medium">{t('analytics.from')}<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className={`${inputClass} mt-1.5`} /></label>
-        <label className="text-sm font-medium">{t('analytics.to')}<input type="date" value={to} onChange={(event) => setTo(event.target.value)} className={`${inputClass} mt-1.5`} /></label>
-        <label className="text-sm font-medium">{t('history.activity')}<select value={type} onChange={(event) => setType(event.target.value)} className={`${inputClass} mt-1.5`}><option value="">{t('history.allActivity')}</option>{types.map((item) => <option key={item} value={item}>{activityLabel(item)}</option>)}</select></label>
+        <div className="mr-auto"><h2 className="font-display text-[26px] font-bold text-slate-900">{t('history.title')}</h2><p className="mt-1 text-[15px] text-slate-600">{t('history.text')}</p></div>
+        <input type="date" aria-label={t('analytics.from')} title={t('analytics.from')} value={from} onChange={(event) => setFrom(event.target.value)} className={control} />
+        <input type="date" aria-label={t('analytics.to')} title={t('analytics.to')} value={to} onChange={(event) => setTo(event.target.value)} className={control} />
+        <select aria-label={t('history.activity')} value={type} onChange={(event) => setType(event.target.value)} className={control}><option value="">{t('history.allActivity')}</option>{types.map((item) => <option key={item} value={item}>{activityLabel(item)}</option>)}</select>
       </div>
-      {!entries ? <p className="py-6 text-center text-sm text-slate-500">{t('history.loading')}</p> : entries.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">{t('history.empty')}</p> : (
-        <ol className="space-y-0 border-l-2 border-slate-100 pl-5">
-          {entries.map((entry) => (
-            <li key={entry.id} className="relative pb-5">
-              <span aria-hidden="true" className="absolute -left-[27px] top-1.5 size-3 rounded-full border-2 border-white bg-indigo-500" />
-              <p className="text-xs text-slate-500"><time dateTime={entry.createdAt}>{formatDateTime(entry.createdAt)}</time> · {entry.actorEmail ?? t('history.system')}</p>
-              <p className="mt-1 text-sm"><span className="mr-2 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">{activityLabel(entry.actionType)}</span>{entry.description}</p>
-              <p className="mt-1 text-xs text-slate-400">{entry.entityType}{entry.entityId ? ` ${entry.entityId.slice(0, 8)}` : ''}</p>
+      {!entries ? <p className="mt-6 text-sm text-slate-500">{t('history.loading')}</p> : entries.length === 0 ? <div className="mt-6"><Empty>{t('history.empty')}</Empty></div> : (
+        <ol className="relative mt-6 space-y-3 before:absolute before:bottom-4 before:left-[11px] before:top-4 before:w-0.5 before:bg-[#DCE5F7]">
+          {entries.map((entry, index) => (
+            <li key={entry.id} className="relative pl-10">
+              <span aria-hidden="true" className={`absolute left-[5px] top-6 rounded-full bg-brand-500 ${index === entries.length - 1 ? 'size-[18px] -translate-x-[3px]' : 'size-3'}`} />
+              <div className={`${card} px-5 py-4`}>
+                <div className="flex flex-wrap items-center gap-3">
+                  <time dateTime={entry.createdAt} className="text-[13px] font-bold text-slate-600">{formatDateTime(entry.createdAt)}</time>
+                  <Badge tone={tone(entry.actionType)}>{activityLabel(entry.actionType)}</Badge>
+                </div>
+                <p className="mt-1.5 font-bold text-slate-900">{entry.description}</p>
+                <p className="mt-0.5 text-sm text-slate-600">{entry.actorEmail ?? t('history.system')}{entry.entityType ? ` · ${entry.entityType}${entry.entityId ? ` ${entry.entityId.slice(0, 8).toUpperCase()}` : ''}` : ''}</p>
+              </div>
             </li>
           ))}
         </ol>

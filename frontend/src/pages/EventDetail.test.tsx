@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkout, getEvent, getTicketTypes } from '../api/events'
+import { checkout, getEvent, getMyOrders, getTicketTypes } from '../api/events'
 import { AuthProvider } from '../lib/auth'
 import { saveSession } from '../lib/storage'
 import EventDetail from './EventDetail'
@@ -12,6 +12,8 @@ vi.mock('../api/events', () => ({
   getEvent: vi.fn(),
   getTicketTypes: vi.fn(),
   payOrder: vi.fn(),
+  cancelOrder: vi.fn(),
+  getMyOrders: vi.fn(),
 }))
 
 vi.mock('../api/platform', () => ({
@@ -101,11 +103,14 @@ describe('EventDetail', () => {
     })
     renderPage()
 
-    await user.selectOptions(await screen.findByLabelText('Quantity for General admission'), '1')
-    await user.type(screen.getByLabelText('Attendee name'), 'Test Attendee')
-    await user.click(screen.getByRole('button', { name: 'Reserve free tickets' }))
+    await user.click(await screen.findByRole('button', { name: 'Add one General admission' }))
+    expect(screen.getByLabelText('Quantity for General admission')).toHaveTextContent('1')
+    await user.click(screen.getByRole('button', { name: 'Get tickets' }))
+    await user.type(screen.getByLabelText('Full name'), 'Test Attendee')
+    expect(screen.getByLabelText('Email')).toHaveValue('attendee@example.com')
+    await user.click(screen.getByRole('button', { name: 'Reserve free ticket' }))
 
-    expect(await screen.findByRole('heading', { name: 'Your tickets are ready!' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'You are going!' })).toBeInTheDocument()
     expect(checkout).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'event-1',
       attendeeName: 'Test Attendee',
@@ -117,7 +122,33 @@ describe('EventDetail', () => {
   it('does not submit without an available ticket selection', async () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: event.title })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reserve free tickets' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Get tickets' })).toBeDisabled()
     expect(checkout).not.toHaveBeenCalled()
+  })
+
+  it('shows a cancelled event with the visitor refund', async () => {
+    vi.mocked(getEvent).mockResolvedValue({ ...event, isCancelled: true })
+    vi.mocked(getMyOrders).mockResolvedValue([{
+      id: 'abcdef12-0000-0000-0000-000000000000',
+      eventId: 'event-1',
+      eventTitle: event.title,
+      status: 'Refunded',
+      paymentMode: 'Paid',
+      total: 5000,
+      refundTotal: 5000,
+      createdAt: '2030-01-01T00:00:00.000Z',
+      items: [],
+      discountTotal: 0,
+      feeTotal: 0,
+      expiresAt: null,
+      paymentStatus: 'Succeeded',
+      promoCode: null,
+    }])
+    renderPage()
+
+    expect(await screen.findByText('This event was cancelled by the organizer')).toBeInTheDocument()
+    expect(await screen.findByText('Order ABCDEF12')).toBeInTheDocument()
+    expect(screen.getByText('Refunded')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Get tickets' })).not.toBeInTheDocument()
   })
 })

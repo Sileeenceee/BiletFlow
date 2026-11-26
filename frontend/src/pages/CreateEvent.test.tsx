@@ -25,7 +25,7 @@ function renderCreateEvent() {
       <MemoryRouter initialEntries={['/events/new']}>
         <Routes>
           <Route path="/events/new" element={<CreateEvent />} />
-          <Route path="/events" element={<h1>Events</h1>} />
+          <Route path="/events/:eventId/setup" element={<h1>Ticket types</h1>} />
         </Routes>
       </MemoryRouter>
     </AuthProvider>,
@@ -47,13 +47,13 @@ describe('CreateEvent', () => {
     const user = userEvent.setup()
     renderCreateEvent()
 
-    await user.type(screen.getByLabelText('Title'), 'A valid event title')
+    await user.type(screen.getByLabelText('Event title'), 'A valid event title')
     await user.type(screen.getByLabelText('Description'), 'A sufficiently long event description.')
-    await user.type(screen.getByLabelText('Name'), 'Main Hall')
+    await user.type(screen.getByLabelText('Venue name'), 'Main Hall')
     await user.selectOptions(await screen.findByRole('combobox', { name: 'City' }), 'Almaty')
-    fireEvent.change(screen.getByLabelText('Starts'), { target: { value: '2030-06-01T18:00' } })
-    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2030-06-01T17:00' } })
-    await user.click(screen.getByRole('button', { name: 'Create event' }))
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2030-06-01T18:00' } })
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-06-01T17:00' } })
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByText('End must be after start')).toBeInTheDocument()
     expect(createEvent).not.toHaveBeenCalled()
@@ -74,13 +74,13 @@ describe('CreateEvent', () => {
     })
     renderCreateEvent()
 
-    await user.type(screen.getByLabelText('Title'), 'A valid event title')
+    await user.type(screen.getByLabelText('Event title'), 'A valid event title')
     await user.type(screen.getByLabelText('Description'), 'A sufficiently long event description.')
-    await user.type(screen.getByLabelText('Name'), 'Main Hall')
+    await user.type(screen.getByLabelText('Venue name'), 'Main Hall')
     await user.selectOptions(await screen.findByRole('combobox', { name: 'City' }), 'Almaty')
-    fireEvent.change(screen.getByLabelText('Starts'), { target: { value: '2030-06-01T18:00' } })
-    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2030-06-01T21:00' } })
-    await user.click(screen.getByRole('button', { name: 'Create event' }))
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2030-06-01T18:00' } })
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-06-01T21:00' } })
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(createEvent).toHaveBeenCalledWith({
       title: 'A valid event title',
@@ -91,20 +91,20 @@ describe('CreateEvent', () => {
       endDateUtc: new Date('2030-06-01T21:00').toISOString(),
       isPublished: false,
     })
-    expect(await screen.findByRole('heading', { name: 'Events' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Ticket types' })).toBeInTheDocument()
   })
 
   it('requires a city to be chosen without calling the API', async () => {
     const user = userEvent.setup()
     renderCreateEvent()
 
-    await user.type(screen.getByLabelText('Title'), 'A valid event title')
+    await user.type(screen.getByLabelText('Event title'), 'A valid event title')
     await user.type(screen.getByLabelText('Description'), 'A sufficiently long event description.')
-    await user.type(screen.getByLabelText('Name'), 'Main Hall')
-    fireEvent.change(screen.getByLabelText('Starts'), { target: { value: '2030-06-01T18:00' } })
-    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2030-06-01T21:00' } })
+    await user.type(screen.getByLabelText('Venue name'), 'Main Hall')
+    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2030-06-01T18:00' } })
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-06-01T21:00' } })
     expect(await screen.findByRole('option', { name: 'Almaty' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Create event' }))
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByText('Choose a city', { selector: '[role="alert"]' })).toBeInTheDocument()
     expect(createEvent).not.toHaveBeenCalled()
@@ -116,6 +116,6 @@ describe('CreateEvent', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the city list: Network error')
     expect(screen.queryByRole('combobox', { name: 'City' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create event' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
   })
 })
