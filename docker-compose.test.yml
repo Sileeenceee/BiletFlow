@@ -1,0 +1,28 @@
+services:
+  postgres:
+    container_name: !reset null
+    ports: !reset []
+    volumes: !reset []
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  api:
+    container_name: !reset null
+    ports: !override
+      - "127.0.0.1::6969"
+    environment:
+      Seed__DemoData: "false"
+      Email__SmtpHost: mailpit
+      Email__SmtpPort: "1025"
+      Email__EnableSsl: "false"
+      Email__Username: ""
+      Email__Password: ""
+
+  mailpit:
+    container_name: !reset null
+    ports: !reset []
+
+  frontend:
+    container_name: !reset null
+    ports: !override
+      - "127.0.0.1::80"

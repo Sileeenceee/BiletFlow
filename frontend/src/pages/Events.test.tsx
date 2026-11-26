@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getEvents, type EventSummary } from '../api/events'
@@ -76,5 +77,23 @@ describe('Events', () => {
     renderEvents()
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not load events'))
+  })
+
+  it('combines a case-insensitive search with the selected city', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getEvents).mockResolvedValue([
+      publishedEvent,
+      { ...publishedEvent, id: 'event-2', title: 'Astana Cinema', city: 'Astana', cityId: 2 },
+      { ...publishedEvent, id: 'event-3', title: 'Astana Jazz', description: 'An evening concert.', city: 'Astana', cityId: 2 },
+    ])
+    renderEvents()
+
+    await screen.findByRole('heading', { name: 'Open Air Cinema' })
+    await user.type(screen.getByRole('textbox', { name: 'Search events' }), 'CINEMA')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by city' }), 'Astana')
+
+    expect(screen.getByRole('heading', { name: 'Astana Cinema' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Open Air Cinema' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Astana Jazz' })).not.toBeInTheDocument()
   })
 })

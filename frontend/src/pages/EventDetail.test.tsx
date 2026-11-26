@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkout, getEvent, getMyOrders, getTicketTypes } from '../api/events'
+import { checkout, getEvent, getMyOrders, getTicketTypes, payOrder, type Order } from '../api/events'
 import { AuthProvider } from '../lib/auth'
 import { saveSession } from '../lib/storage'
 import EventDetail from './EventDetail'
@@ -80,6 +80,7 @@ describe('EventDetail', () => {
     vi.mocked(getEvent).mockReset()
     vi.mocked(getTicketTypes).mockReset()
     vi.mocked(checkout).mockReset()
+    vi.mocked(payOrder).mockReset()
     vi.mocked(getEvent).mockResolvedValue(event)
     vi.mocked(getTicketTypes).mockResolvedValue([freeTicket])
   })
@@ -150,5 +151,46 @@ describe('EventDetail', () => {
     expect(await screen.findByText('Order ABCDEF12')).toBeInTheDocument()
     expect(screen.getByText('Refunded')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Get tickets' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a paid reservation open after a failed payment and confirms it on retry', async () => {
+    const user = userEvent.setup()
+    const reservation: Order = {
+      id: 'order-paid',
+      eventId: event.id,
+      eventTitle: event.title,
+      status: 'Pending',
+      paymentMode: 'Simulation',
+      total: 5000,
+      createdAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:15:00.000Z',
+      items: [],
+      discountTotal: 0,
+      feeTotal: 0,
+      paymentStatus: null,
+      promoCode: null,
+    }
+    vi.mocked(getTicketTypes).mockResolvedValue([{ ...freeTicket, price: 5000 }])
+    vi.mocked(checkout).mockResolvedValue(reservation)
+    vi.mocked(payOrder)
+      .mockResolvedValueOnce({ ...reservation, paymentStatus: 'Failed' })
+      .mockResolvedValueOnce({ ...reservation, status: 'Confirmed', paymentStatus: 'Succeeded' })
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Add one General admission' }))
+    await user.click(screen.getByRole('button', { name: 'Get tickets' }))
+    await user.type(screen.getByLabelText('Full name'), 'Test Attendee')
+    await user.click(screen.getByRole('button', { name: 'Reserve and continue to payment' }))
+
+    expect(await screen.findByRole('button', { name: /^Pay 5\s000 ₸$/ })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Go to my tickets' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Simulate a declined card' }))
+    expect(payOrder).toHaveBeenNthCalledWith(1, reservation.id, 'failed')
+    expect(await screen.findByRole('heading', { name: 'Payment did not go through' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByRole('heading', { name: 'You are going!' })).toBeInTheDocument()
+    expect(payOrder).toHaveBeenNthCalledWith(2, reservation.id, 'succeeded')
+    expect(screen.getByRole('link', { name: 'Go to my tickets' })).toHaveAttribute('href', '/orders')
   })
 })

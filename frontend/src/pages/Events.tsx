@@ -99,9 +99,16 @@ export default function Events() {
     }
   }
 
+  // Results filter as you type; the URL keeps the query so it survives back/forward.
+  function search(value: string) {
+    setDraftQuery(value)
+    setSyncedQuery(value.trim())
+    update((next) => { if (value.trim()) next.set('q', value.trim()); else next.delete('q') })
+  }
+
   function submitSearch(event: FormEvent) {
     event.preventDefault()
-    update((next) => { if (draftQuery.trim()) next.set('q', draftQuery.trim()); else next.delete('q') })
+    search(draftQuery)
   }
 
   if (loading) return <p>{t('events.loading')}</p>
@@ -140,7 +147,7 @@ export default function Events() {
 
       <form onSubmit={submitSearch} role="search" className="mt-6 flex items-center gap-3 rounded-xl border border-slate-200 bg-white py-2 pl-6 pr-2">
         <SearchIcon className="size-5 shrink-0 text-slate-500" />
-        <input aria-label={t('events.search')} value={draftQuery} onChange={(event) => setDraftQuery(event.target.value)} placeholder={t('events.searchPlaceholder')} className="min-w-0 flex-1 bg-transparent py-2 text-[15px] outline-none placeholder:text-slate-500" />
+        <input aria-label={t('events.search')} value={draftQuery} onChange={(event) => search(event.target.value)} placeholder={t('events.searchPlaceholder')} className="min-w-0 flex-1 bg-transparent py-2 text-[15px] outline-none placeholder:text-slate-500" />
         <button type="submit" className="h-11 rounded-lg bg-brand-500 px-6 text-sm font-bold text-white transition hover:bg-brand-600 sm:px-12">{t('home.search')}</button>
       </form>
 

@@ -35,6 +35,8 @@ npm run lint
 npm run test:run
 ```
 
+See the [repository test instructions](../README.md#automated-tests) for the Playwright browser suite and its disposable backend.
+
 To run the complete app with PostgreSQL and the backend, use
 `docker compose up --build` from the repository root and open
 `http://localhost:8080`.
